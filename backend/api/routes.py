@@ -40,6 +40,6 @@ async def ws_metrics(ws: WebSocket):
   await ws.accept()
   try:
     async for m in manager.metrics_stream():
-      await ws.send_json(m.model_dump())
+      await ws.send_text(m.model_dump_json())
   except WebSocketDisconnect:
     return
