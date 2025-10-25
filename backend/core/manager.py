@@ -18,11 +18,11 @@ class StrategyManager:
   def state(self) -> StrategyState:
     return self._state
 
-  async def start(self, *, feed, strategy, mode: RunMode, symbol: str) -> None:x
+  async def start(self, *, feed, strategy, mode: RunMode, symbol: str) -> None:
     if self._state != "IDLE":
       raise RuntimeError("strategy already running")
     self._state = "RUNNING"
-    self._runner = StrategyRunner(feed=feed, strategy=strategy, mode=mode, symbol=symbol, 
+    self._runner = StrategyRunner(feed=feed, strategy=strategy, mode=mode, symbol=symbol,
                                   queue=self._q, state_getter=self.state)
     self._task = asyncio.create_task(self._runner.run())
     log.info("strategy started mode=%s symbol=%s", mode, symbol)
@@ -40,13 +40,13 @@ class StrategyManager:
 
   async def metrics_stream(self) -> AsyncIterator[Metrics]:
     while True:
-        try:
-          m = await asyncio.wait_for(self._q.get(), timeout=1.0)
-          self._latest = m
-          yield m
-        except asyncio.TimeoutError:
-          if self._latest is not None:
-            yield self._latest
-        except Exception as e:
-          log.error(f"Error in metrics stream: {e}")
-          break
+      try:
+        m = await asyncio.wait_for(self._q.get(), timeout=1.0)
+        self._latest = m
+        yield m
+      except asyncio.TimeoutError:
+        if self._latest is not None:
+          yield self._latest
+      except Exception as e:
+        log.error(f"Error in metrics stream: {e}")
+        break

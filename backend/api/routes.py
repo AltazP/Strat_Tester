@@ -3,7 +3,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, st
 from pydantic import BaseModel
 from core.manager import StrategyManager
 from feeds.random_walk import RandomWalkFeed
-from strategies.random_walk_strategy.py import RandomWalkStrategy
+from strategies.random_walk_strategy import RandomWalkStrategy
 
 router = APIRouter()
 manager = StrategyManager()

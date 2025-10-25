@@ -22,42 +22,42 @@ class StrategyRunner:
     self._position = 1.0  # fixed long for visibility today
 
   async def run(self) -> None:
-      await self.feed.start([self.symbol])
-      await self.strategy.on_start({"symbol": self.symbol, "position": self._position})
-      last_m: Optional[Metrics] = None
-      try:
-        async for tick in self.feed:
-          if self._stopping.is_set():
-            break
-          t0 = time.perf_counter()
+    await self.feed.start([self.symbol])
+    await self.strategy.on_start({"symbol": self.symbol, "position": self._position})
+    last_m: Optional[Metrics] = None
+    try:
+      async for tick in self.feed:
+        if self._stopping.is_set():
+          break
+        t0 = time.perf_counter()
 
-          mid = tick.get("mid") or (tick["bid"] + tick["ask"]) / 2.0
-          if self._entry_price is None:
-            self._entry_price = mid
+        mid = tick.get("mid") or (tick["bid"] + tick["ask"]) / 2.0
+        if self._entry_price is None:
+          self._entry_price = mid
 
-          self._num_ticks += 1
-          pnl = self._position * (mid - self._entry_price)
-          self._pnl_max = max(self._pnl_max, pnl)
-          drawdown = pnl - self._pnl_max
-          
-          await self.strategy.on_tick({"symbol": self.symbol, "mid": mid, "tick": self._num_ticks})
+        self._num_ticks += 1
+        pnl = self._position * (mid - self._entry_price)
+        self._pnl_max = max(self._pnl_max, pnl)
+        drawdown = pnl - self._pnl_max
+        
+        await self.strategy.on_tick({"symbol": self.symbol, "mid": mid, "tick": self._num_ticks})
 
-          m = Metrics(
-            ts=datetime.utcnow(),
-            strategy=type(self.strategy).__name__,
-            mode=self.mode,
-            symbol=self.symbol,
-            price=mid,
-            position=self._position,
-            pnl_unrealized=pnl,
-            pnl_max=self._pnl_max,
-            drawdown=drawdown,
-            num_ticks=self._num_ticks,
-            latency_ms=(time.perf_counter() - t0) * 1000.0,
-            state=self._state_getter(),
-          )
-          last_m = m
-          await self.q.put(m)
+        m = Metrics(
+          ts=datetime.utcnow(),
+          strategy=type(self.strategy).__name__,
+          mode=self.mode,
+          symbol=self.symbol,
+          price=mid,
+          position=self._position,
+          pnl_unrealized=pnl,
+          pnl_max=self._pnl_max,
+          drawdown=drawdown,
+          num_ticks=self._num_ticks,
+          latency_ms=(time.perf_counter() - t0) * 1000.0,
+          state=self._state_getter(),
+        )
+        last_m = m
+        await self.q.put(m)
 
     finally:
       await self.strategy.on_stop()

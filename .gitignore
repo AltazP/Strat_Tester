@@ -1,1 +1,12 @@
 .venv/
+.env
+.env.*
+!.env.example
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+# Frontend
+frontend/.next/
+frontend/node_modules/
