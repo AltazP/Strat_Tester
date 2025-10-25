@@ -7,15 +7,15 @@ StrategyState = Literal["IDLE", "RUNNING", "STOPPING"]
 RunMode = Literal["sim", "oanda-shadow"]
 
 class Metrics(BaseModel):
-    ts: datetime
-    strategy: str
-    mode: RunMode
-    symbol: str
-    price: float
-    position: float
-    pnl_unrealized: float
-    pnl_max: float
-    drawdown: float
-    num_ticks: int
-    latency_ms: float
-    state: StrategyState
+  ts: datetime
+  strategy: str
+  mode: RunMode
+  symbol: str
+  price: float
+  position: float
+  pnl_unrealized: float
+  pnl_max: float
+  drawdown: float
+  num_ticks: int
+  latency_ms: float
+  state: StrategyState
