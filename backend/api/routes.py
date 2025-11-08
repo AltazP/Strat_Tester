@@ -4,8 +4,10 @@ from pydantic import BaseModel
 from core.manager import StrategyManager
 from feeds.random_walk import RandomWalkFeed
 from strategies.random_walk_strategy import RandomWalkStrategy
+from api.backtest_routes import router as backtest_router
 
 router = APIRouter()
+router.include_router(backtest_router)
 manager = StrategyManager()
 
 class StartBody(BaseModel):
