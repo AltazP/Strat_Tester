@@ -58,3 +58,8 @@ class StrategyRegistry:
 
 REGISTRY = StrategyRegistry()
 REGISTRY.reload()
+
+def load_strategies() -> list[Type[Strategy]]:
+    """Load all available strategy classes."""
+    REGISTRY.reload()
+    return [spec.cls for spec in REGISTRY.list()]
