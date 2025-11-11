@@ -26,18 +26,19 @@ def run_backtest(
     notional_per_unit: float = 1.0,
     slippage: float = 0.0,
     fee_bps: float = 0.0,
+    initial_equity: float = 10000.0,
 ) -> Result:
     ctx = BacktestContext(params=strategy.params)
     strategy.on_start(ctx)
 
-    equity = 0.0
+    equity = initial_equity
     curve: List[Dict[str, float]] = []
     trades: List[Trade] = []
     pos = 0.0
     entry_px: Optional[float] = None
 
     rets: List[float] = []
-    peak = 0.0
+    peak = initial_equity
     max_dd = 0.0
 
     for i, bar in enumerate(bars):
@@ -63,15 +64,18 @@ def run_backtest(
         curve.append({"ts": bar.ts, "equity": equity + mtm})
 
         if len(curve) > 1:
-            r = (curve[-1]["equity"] - curve[-2]["equity"]) / (abs(curve[-2]["equity"]) + 1e-9)
-            rets.append(r)
+            prev_eq = curve[-2]["equity"]
+            if prev_eq != 0:
+                r = (curve[-1]["equity"] - prev_eq) / abs(prev_eq)
+                rets.append(r)
 
         peak = max(peak, curve[-1]["equity"])
         max_dd = min(max_dd, curve[-1]["equity"] - peak)
 
     strategy.on_stop(ctx)
 
-    total_return = (curve[-1]["equity"] - curve[0]["equity"]) if curve else 0.0
+    final_equity = curve[-1]["equity"] if curve else initial_equity
+    total_return = final_equity - initial_equity
     vol = pstdev(rets) if rets else 0.0
     sharpe = (sum(rets)/len(rets))/(vol+1e-12) * sqrt(252) if rets else 0.0
 
@@ -80,14 +84,20 @@ def run_backtest(
     avg_win = sum(t.pnl for t in wins)/len(wins) if wins else 0.0
     losses = [t for t in trades if t.pnl <= 0]
     avg_loss = sum(t.pnl for t in losses)/len(losses) if losses else 0.0
+    
+    # Percent max drawdown
+    max_dd_pct = max_dd / peak if peak > 0 else 0.0
 
     metrics = {
         "total_return": total_return,
         "max_drawdown": max_dd,
+        "max_drawdown_pct": max_dd_pct,
         "sharpe": sharpe,
         "num_trades": len(trades),
         "win_rate": win_rate,
         "avg_win": avg_win,
         "avg_loss": avg_loss,
+        "initial_equity": initial_equity,
+        "final_equity": final_equity,
     }
     return Result(equity=curve, trades=trades, metrics=metrics)

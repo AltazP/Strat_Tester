@@ -19,7 +19,6 @@ export async function GET(req: NextRequest) {
 
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${OANDA_KEY}` },
-      // OANDA returns ISO timestamps; no need to cache during dev
       cache: "no-store",
     });
 

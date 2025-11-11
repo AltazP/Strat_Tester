@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 import httpx
-from typing import List
+from typing import List, Optional
 from strategies.base import Bar
 
 def _get_oanda_cfg() -> tuple[str, str]:
@@ -17,11 +17,27 @@ def _get_oanda_cfg() -> tuple[str, str]:
         )
     return host, key
 
-async def fetch_candles(instrument: str, granularity: str, count: int) -> List[Bar]:
+async def fetch_candles(
+    instrument: str, 
+    granularity: str, 
+    count: Optional[int] = None,
+    start: Optional[str] = None,
+    end: Optional[str] = None
+) -> List[Bar]:
+    """
+    Fetch candles from OANDA. Either provide `count` for lookback, 
+    or `start`/`end` for a date range.
+    """
     host, key = _get_oanda_cfg()
     url = f"{host}/v3/instruments/{instrument}/candles"
     headers = {"Authorization": f"Bearer {key}"}
-    params = {"granularity": granularity, "count": str(count), "price": "M"}
+    params = {"granularity": granularity, "price": "M"}
+    
+    if start and end:
+        params["from"] = start
+        params["to"] = end
+    else:
+        params["count"] = str(count or 500)
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -30,7 +46,6 @@ async def fetch_candles(instrument: str, granularity: str, count: int) -> List[B
         raise RuntimeError(f"Failed to reach OANDA: {e}") from e
 
     if r.status_code == 401:
-        # Starlette often won’t attach CORS headers on errors; this message helps you debug fast
         raise RuntimeError("OANDA auth failed (401). Check OANDA_PRACTICE_API_KEY.")
     if r.status_code == 404:
         raise RuntimeError(f"Instrument not found or endpoint not available: {instrument}")

@@ -738,3 +738,9 @@ span.flatpickr-weekday,
   opacity: 0.8;
   cursor: grabbing; /* Changes the cursor to indicate dragging */
 }
+
+/* globals.css */
+.ui-input {
+  @apply border border-zinc-200 rounded px-2 py-2 bg-white text-zinc-900
+          focus:outline-none focus:ring-2 focus:ring-blue-500/30;
+}
