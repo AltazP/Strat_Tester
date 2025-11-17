@@ -760,12 +760,20 @@ function AccountManagementModal({
                               <input
                                 type={isNum ? "number" : "text"}
                                 className="w-full rounded-lg border border-stroke dark:border-strokedark bg-white dark:bg-gray-900 py-2 px-3 text-sm text-gray-800 dark:text-white/90 outline-none transition focus:border-primary"
-                                value={displayValue}
+                                value={displayValue === "NaN" || displayValue === "undefined" ? "" : displayValue}
                                 onChange={(e) => {
-                                  const value = isNum
-                                    ? (e.target.value === "" ? "" : Number(e.target.value))
-                                    : e.target.value;
-                                  setSelectedParams({ ...selectedParams, [key]: value });
+                                  if (isNum) {
+                                    if (e.target.value === "") {
+                                      setSelectedParams({ ...selectedParams, [key]: "" });
+                                    } else {
+                                      const numValue = Number(e.target.value);
+                                      if (!isNaN(numValue) && isFinite(numValue)) {
+                                        setSelectedParams({ ...selectedParams, [key]: numValue });
+                                      }
+                                    }
+                                  } else {
+                                    setSelectedParams({ ...selectedParams, [key]: e.target.value });
+                                  }
                                 }}
                                 step={isNum ? step : undefined}
                                 min={isNum && schema.minimum !== undefined ? String(schema.minimum) : undefined}
@@ -840,11 +848,14 @@ function AccountManagementModal({
                       <input
                         type="number"
                         className="w-full rounded-lg border border-stroke dark:border-strokedark bg-white dark:bg-gray-900 py-3 px-4 text-gray-800 dark:text-white/90 outline-none transition focus:border-primary"
-                        value={formData.max_position_size}
-                        onChange={(e) => setFormData({ ...formData, max_position_size: parseInt(e.target.value) || 10000 })}
+                        value={isNaN(formData.max_position_size) ? "" : formData.max_position_size}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setFormData({ ...formData, max_position_size: isNaN(val) ? 10000 : val });
+                        }}
                       />
                       <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                        ≈ ${(formData.max_position_size / 10000).toFixed(2)} per pip on EUR/USD
+                        ≈ ${isNaN(formData.max_position_size) ? "0.00" : (formData.max_position_size / 10000).toFixed(2)} per pip on EUR/USD
                       </p>
                     </div>
                     <div>
@@ -854,8 +865,11 @@ function AccountManagementModal({
                       <input
                         type="number"
                         className="w-full rounded-lg border border-stroke dark:border-strokedark bg-white dark:bg-gray-900 py-3 px-4 text-gray-800 dark:text-white/90 outline-none transition focus:border-primary"
-                        value={formData.max_daily_loss}
-                        onChange={(e) => setFormData({ ...formData, max_daily_loss: parseFloat(e.target.value) })}
+                        value={isNaN(formData.max_daily_loss) ? "" : formData.max_daily_loss}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setFormData({ ...formData, max_daily_loss: isNaN(val) ? 1000 : val });
+                        }}
                       />
                     </div>
                   </div>
@@ -1171,8 +1185,21 @@ export default function PaperTradingPage() {
         try {
           if (contentType && contentType.includes("application/json")) {
             const errorData = await res.json();
-            errorMessage = errorData.detail || errorData.message || errorMessage;
             console.error("Backend error response:", errorData);
+            
+            // Extract error message from various possible formats
+            if (typeof errorData === "string") {
+              errorMessage = errorData;
+            } else if (errorData?.detail) {
+              errorMessage = String(errorData.detail);
+            } else if (errorData?.message) {
+              errorMessage = String(errorData.message);
+            } else if (errorData?.error) {
+              errorMessage = String(errorData.error);
+            } else {
+              // Try to stringify the whole object
+              errorMessage = JSON.stringify(errorData);
+            }
           } else {
             // Try to get text response
             const textResponse = await res.text();
@@ -1184,6 +1211,7 @@ export default function PaperTradingPage() {
           errorMessage = `${errorMessage}: ${res.status} ${res.statusText}`;
         }
         
+        console.error("Extracted error message:", errorMessage);
         throw new Error(errorMessage);
       }
       
