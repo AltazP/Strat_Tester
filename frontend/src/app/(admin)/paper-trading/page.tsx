@@ -713,27 +713,50 @@ function AccountManagementModal({
                     <div className="space-y-3 p-4 rounded-lg bg-white dark:bg-gray-900">
                       <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Parameters</p>
                       <div className="grid grid-cols-2 gap-3">
-                        {Object.entries(selectedStrategy.params_schema.properties as Record<string, { type?: string; title?: string; default?: unknown }>).map(([key, schema]) => {
+                        {Object.entries(selectedStrategy.params_schema.properties as Record<string, { type?: string; title?: string; default?: unknown; multipleOf?: number; minimum?: number; maximum?: number }>).map(([key, schema]) => {
+                          const type = schema.type;
+                          const isNum = type === "number" || type === "integer";
+                          const isBool = type === "boolean";
                           const rawValue = selectedParams[key];
-                          const displayValue = typeof rawValue === "string" || typeof rawValue === "number" ? String(rawValue) : "";
+                          const fallback = schema.default;
+                          const resolvedVal = rawValue !== undefined ? rawValue : fallback;
+                          const displayValue = typeof resolvedVal === "string" || typeof resolvedVal === "number" ? String(resolvedVal) : "";
+                          const boolVal = isBool ? Boolean(resolvedVal) : false;
                           const title = typeof schema.title === "string" ? schema.title : key;
+                          const step = schema.multipleOf || (type === "integer" ? 1 : "any");
                           return (
                           <div key={key}>
                             <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                               {title}
                             </label>
-                            <input
-                              type={schema.type === "integer" || schema.type === "number" ? "number" : "text"}
-                              className="w-full rounded-lg border border-stroke dark:border-strokedark bg-white dark:bg-gray-900 py-2 px-3 text-sm text-gray-800 dark:text-white/90 outline-none transition focus:border-primary"
-                              value={displayValue}
-                              onChange={(e) => {
-                                const value = schema.type === "number" || schema.type === "integer" 
-                                  ? parseFloat(e.target.value)
-                                  : e.target.value;
-                                setSelectedParams({ ...selectedParams, [key]: value });
-                              }}
-                              step={schema.type === "number" ? "any" : undefined}
-                            />
+                            {isBool ? (
+                              <label className="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4 rounded border-stroke dark:border-strokedark text-primary focus:ring-primary"
+                                  checked={boolVal}
+                                  onChange={(e) => {
+                                    setSelectedParams({ ...selectedParams, [key]: e.target.checked });
+                                  }}
+                                />
+                                <span>{boolVal ? "True" : "False"}</span>
+                              </label>
+                            ) : (
+                              <input
+                                type={isNum ? "number" : "text"}
+                                className="w-full rounded-lg border border-stroke dark:border-strokedark bg-white dark:bg-gray-900 py-2 px-3 text-sm text-gray-800 dark:text-white/90 outline-none transition focus:border-primary"
+                                value={displayValue}
+                                onChange={(e) => {
+                                  const value = isNum
+                                    ? (e.target.value === "" ? "" : Number(e.target.value))
+                                    : e.target.value;
+                                  setSelectedParams({ ...selectedParams, [key]: value });
+                                }}
+                                step={isNum ? step : undefined}
+                                min={isNum && schema.minimum !== undefined ? String(schema.minimum) : undefined}
+                                max={isNum && schema.maximum !== undefined ? String(schema.maximum) : undefined}
+                              />
+                            )}
                           </div>
                         );
                         })}

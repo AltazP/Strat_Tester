@@ -658,24 +658,51 @@ export default function BacktestingPage() {
               {Object.entries(currentSchema.properties as Record<string, { type?: string; default?: unknown; multipleOf?: number; minimum?: number; maximum?: number }>).map(([k, v]) => {
                 const type = v.type;
                 const isNum = type === "number" || type === "integer";
-                const rawVal = params[k] ?? v.default ?? "";
-                const fieldVal = typeof rawVal === "string" || typeof rawVal === "number" ? String(rawVal) : "";
+                const isBool = type === "boolean";
+                const rawVal = params[k];
+                const fallback = v.default;
+                const resolvedVal = rawVal !== undefined ? rawVal : fallback;
+                const fieldVal = typeof resolvedVal === "string" || typeof resolvedVal === "number" ? String(resolvedVal) : "";
+                const boolVal = (() => {
+                  if (typeof resolvedVal === "boolean") return resolvedVal;
+                  if (typeof resolvedVal === "string") {
+                    const lower = resolvedVal.toLowerCase();
+                    if (lower === "true") return true;
+                    if (lower === "false") return false;
+                  }
+                  return Boolean(resolvedVal);
+                })();
                 const step = v.multipleOf || (type === "integer" ? 1 : "any");
                 return (
                   <div key={k}>
                     <Label htmlFor={`param-${k}`}>{k}</Label>
-                    <input
-                      id={`param-${k}`}
-                      type={isNum ? "number" : "text"}
-                      step={isNum ? step : undefined}
-                      min={isNum ? String(v.minimum) : undefined}
-                      max={isNum ? String(v.maximum) : undefined}
-                      value={fieldVal}
-                      onChange={(e) =>
-                        setParams(p => ({ ...p, [k]: isNum ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value }))
-                      }
-                      className="h-11 w-full rounded-lg border border-gray-300 dark:border-gray-700 px-4 py-2.5 text-sm dark:bg-gray-900 dark:text-white/90 focus:border-brand-300 focus:outline-hidden focus:ring-3 focus:ring-brand-500/10 dark:focus:border-brand-800"
-                    />
+                    {isBool ? (
+                      <label className="flex items-center gap-3">
+                        <input
+                          id={`param-${k}`}
+                          type="checkbox"
+                          checked={boolVal}
+                          onChange={(e) =>
+                            setParams(p => ({ ...p, [k]: e.target.checked }))
+                          }
+                          className="h-5 w-5 rounded border-gray-300 text-brand-600 focus:ring-brand-500 dark:bg-gray-900 dark:border-gray-700"
+                        />
+                        <span className="text-sm text-gray-700 dark:text-gray-300">{boolVal ? "True" : "False"}</span>
+                      </label>
+                    ) : (
+                      <input
+                        id={`param-${k}`}
+                        type={isNum ? "number" : "text"}
+                        step={isNum ? step : undefined}
+                        min={isNum ? String(v.minimum) : undefined}
+                        max={isNum ? String(v.maximum) : undefined}
+                        value={fieldVal}
+                        onChange={(e) =>
+                          setParams(p => ({ ...p, [k]: isNum ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value }))
+                        }
+                        className="h-11 w-full rounded-lg border border-gray-300 dark:border-gray-700 px-4 py-2.5 text-sm dark:bg-gray-900 dark:text-white/90 focus:border-brand-300 focus:outline-hidden focus:ring-3 focus:ring-brand-500/10 dark:focus:border-brand-800"
+                      />
+                    )}
                   </div>
                 );
               })}
