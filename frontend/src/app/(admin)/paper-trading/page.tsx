@@ -39,6 +39,7 @@ type PaperSession = {
   total_trades: number;
   winning_trades: number;
   losing_trades: number;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   positions: Record<string, unknown>;
   open_trades_count: number;
   closed_trades_count: number;
@@ -53,7 +54,9 @@ type PaperSession = {
 type Strategy = {
   key: string;
   doc?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   params_schema?: Record<string, unknown>;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   presets?: Record<string, unknown> | null;
 };
 
