@@ -49,14 +49,28 @@ export async function POST(
     const params = await context.params;
     const path = params.path.join('/');
     const url = `${BACKEND_URL}/${path}`;
-    const body = await request.json();
+
+    // Some requests (like /start) don't send a body. Attempt to read the body safely,
+    // but treat empty bodies as undefined so we don't throw "Unexpected end of JSON input".
+    let bodyText: string | undefined;
+    try {
+      const raw = await request.text();
+      if (raw && raw.trim() !== '') {
+        bodyText = raw;
+      }
+    } catch (err) {
+      console.error('Failed to read request body:', err);
+      bodyText = undefined;
+    }
 
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
+      headers: bodyText
+        ? {
+            'Content-Type': 'application/json',
+          }
+        : undefined,
+      body: bodyText,
       cache: 'no-store',
     });
 
