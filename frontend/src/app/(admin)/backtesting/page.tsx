@@ -54,7 +54,26 @@ function defaultsFromSchema(schema: Record<string, unknown> | undefined): Record
   return out;
 }
 
-const GSEC: Record<string, number> = { S5:5, M1:60, M5:300, M15:900, H1:3600, D:86400 };
+// Granularity to seconds mapping (matches OANDA API and paper trading)
+const GSEC: Record<string, number> = {
+  // Seconds
+  S5: 5,
+  S10: 10,
+  S15: 15,
+  S30: 30,
+  // Minutes
+  M1: 60,
+  M2: 120,
+  M5: 300,
+  M15: 900,
+  M30: 1800,
+  // Hours
+  H1: 3600,
+  H2: 7200,
+  H4: 14400,
+  // Daily
+  D: 86400,
+};
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
 // UTC input helpers
@@ -114,7 +133,6 @@ export default function BacktestingPage() {
   const pageSize = 12;
 
   const instruments = ["EUR_USD", "USD_CAD", "GBP_USD", "USD_JPY", "AUD_USD"];
-  const granularities = Object.keys(GSEC);
 
   // defaults
   useEffect(() => {
@@ -435,12 +453,33 @@ export default function BacktestingPage() {
           <div>
             <Label>Timeframe</Label>
             <div className="relative">
-              <Select
-                options={granularities.map(g => ({ value: g, label: g }))}
-                defaultValue={granularity}
-                onChange={(v) => setGranularity(v as keyof typeof GSEC)}
-                className="dark:bg-gray-900"
-              />
+              <select
+                value={granularity}
+                onChange={(e) => setGranularity(e.target.value as keyof typeof GSEC)}
+                className="w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 py-3 px-4 pr-10 text-gray-800 dark:text-white/90 outline-none transition focus:border-brand-300 focus:ring-3 focus:ring-brand-500/10 dark:focus:border-brand-800 appearance-none"
+              >
+                <optgroup label="Seconds">
+                  <option value="S5">5 Seconds</option>
+                  <option value="S10">10 Seconds</option>
+                  <option value="S15">15 Seconds</option>
+                  <option value="S30">30 Seconds</option>
+                </optgroup>
+                <optgroup label="Minutes">
+                  <option value="M1">1 Minute</option>
+                  <option value="M2">2 Minutes</option>
+                  <option value="M5">5 Minutes</option>
+                  <option value="M15">15 Minutes</option>
+                  <option value="M30">30 Minutes</option>
+                </optgroup>
+                <optgroup label="Hours">
+                  <option value="H1">1 Hour</option>
+                  <option value="H2">2 Hours</option>
+                  <option value="H4">4 Hours</option>
+                </optgroup>
+                <optgroup label="Daily">
+                  <option value="D">Daily</option>
+                </optgroup>
+              </select>
               <span className="absolute text-gray-500 -translate-y-1/2 pointer-events-none right-3 top-1/2 dark:text-gray-400">
                 <ChevronDownIcon />
               </span>

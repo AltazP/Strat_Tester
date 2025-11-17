@@ -8,8 +8,22 @@ import { ArrowUpIcon, ArrowDownIcon } from "@/icons";
 const BE = "/api/backend";
 
 const getWebSocketUrl = () => {
+  // Check if we're on HTTPS (production/Vercel)
+  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
-  return backendUrl.replace("http", "ws") + "/paper-trading/ws/sessions";
+  
+  // If on HTTPS but backend is HTTP, WebSocket won't work (mixed content)
+  // Return null to disable WebSocket and use polling instead
+  if (isHttps && backendUrl.startsWith('http://')) {
+    return null;
+  }
+  
+  // Convert http -> ws, https -> wss
+  if (backendUrl.startsWith('https://')) {
+    return backendUrl.replace("https://", "wss://") + "/paper-trading/ws/sessions";
+  } else {
+    return backendUrl.replace("http://", "ws://") + "/paper-trading/ws/sessions";
+  }
 };
 
 type AccountInfo = {
@@ -44,7 +58,6 @@ type PaperSession = {
   total_trades: number;
   winning_trades: number;
   losing_trades: number;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   positions: Record<string, unknown>;
   open_trades_count: number;
   closed_trades_count: number;
@@ -59,9 +72,7 @@ type PaperSession = {
 type Strategy = {
   key: string;
   doc?: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   params_schema?: Record<string, unknown>;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   presets?: Record<string, unknown> | null;
 };
 
@@ -105,17 +116,21 @@ function ConnectionStatus({ isConnected, lastUpdateTime }: { isConnected: boolea
   
   useEffect(() => {
     const interval = setInterval(() => {
-      setTimeSinceUpdate(Math.floor((Date.now() - lastUpdateTime) / 1000));
+      const elapsed = Math.floor((Date.now() - lastUpdateTime) / 1000);
+      setTimeSinceUpdate(elapsed);
     }, 1000);
     return () => clearInterval(interval);
   }, [lastUpdateTime]);
+  
+  // Format time display - cap at 60s for readability
+  const displayTime = timeSinceUpdate > 60 ? `${Math.floor(timeSinceUpdate / 60)}m ago` : `${timeSinceUpdate}s ago`;
   
   return (
     <div className="mb-4 flex items-center justify-between">
       <div className="flex items-center gap-2">
         <div className={`h-2 w-2 rounded-full ${isConnected ? 'bg-success animate-pulse' : 'bg-warning'}`}></div>
         <span className="text-xs text-gray-500 dark:text-gray-400">
-          {isConnected ? 'Connected' : 'Disconnected'} • Last update: {timeSinceUpdate}s ago
+          {isConnected ? 'Connected' : 'Disconnected'} • Last update: {displayTime}
         </span>
       </div>
     </div>
@@ -932,14 +947,13 @@ export default function PaperTradingPage() {
   }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      void loadAccounts();
-    }, 15000);
-    return () => clearInterval(interval);
-  }, []);
-  
-  useEffect(() => {
     const wsUrl = getWebSocketUrl();
+    
+    // Skip WebSocket if URL is null (HTTPS page with HTTP backend)
+    if (!wsUrl) {
+      console.log("WebSocket disabled (HTTPS page with HTTP backend - using polling instead)");
+      return;
+    }
     
     try {
       const ws = new WebSocket(wsUrl);
@@ -986,6 +1000,15 @@ export default function PaperTradingPage() {
     }
   }, []);
   
+  // Poll accounts every 15 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void loadAccounts();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
+  
+  // Poll positions/trades every 3 seconds when sessions exist
   useEffect(() => {
     if (sessions.length > 0) {
       sessions.forEach(session => {
@@ -997,8 +1020,6 @@ export default function PaperTradingPage() {
           fetchPositions(session.session_id);
           fetchTrades(session.session_id);
         });
-        void loadAccounts();
-        setLastUpdateTime(Date.now());
       }, 3000);
       return () => clearInterval(interval);
     }
@@ -1050,17 +1071,25 @@ export default function PaperTradingPage() {
   
   async function loadAccounts() {
     try {
-      const accountsRes = await fetch(`${BE}/paper-trading/accounts`);
+      const accountsRes = await fetch(`${BE}/paper-trading/accounts`, {
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
       if (!accountsRes.ok) {
+        console.warn(`loadAccounts failed: ${accountsRes.status} ${accountsRes.statusText}`);
         setIsConnected(false);
         return;
       }
+      
       const accountsData = await accountsRes.json();
       setAccounts(accountsData);
       setLastUpdateTime(Date.now());
       setIsConnected(true);
-    } catch {
-      console.warn("loadAccounts skipped");
+    } catch (err) {
+      console.warn("loadAccounts error:", err);
       setIsConnected(false);
     }
   }
@@ -1130,15 +1159,33 @@ export default function PaperTradingPage() {
   
   async function startSession(sessionId: string) {
     try {
-      const res = await fetch(`${BE}/paper-trading/sessions/${sessionId}/start`, { method: "POST" });
-      if (!res.ok) throw new Error("Failed to start session");
+      const res = await fetch(`${BE}/paper-trading/sessions/${sessionId}/start`, { 
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      
+      if (!res.ok) {
+        let errorMessage = "Failed to start session";
+        try {
+          const errorData = await res.json();
+          errorMessage = errorData.detail || errorData.message || errorMessage;
+        } catch {
+          // If response isn't JSON, use status text
+          errorMessage = `${errorMessage}: ${res.status} ${res.statusText}`;
+        }
+        throw new Error(errorMessage);
+      }
+      
+      await res.json(); // Consume response
       await loadData();
       setTimeout(() => {
         fetchTrades(sessionId);
         fetchPositions(sessionId);
       }, 2000);
     } catch (err: unknown) {
-      alert((err as Error).message || "Failed to start session");
+      const errorMsg = (err as Error).message || "Failed to start session";
+      console.error("Start session error:", err);
+      alert(errorMsg);
     }
   }
   
