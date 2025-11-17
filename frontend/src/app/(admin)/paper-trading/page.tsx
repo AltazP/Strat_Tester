@@ -1210,9 +1210,16 @@ export default function PaperTradingPage() {
                 errorMessage = JSON.stringify(errorData);
               }
             } catch (jsonError) {
-              // JSON parse failed, use text response
-              console.error("Failed to parse JSON, using text response:", jsonError);
-              errorMessage = textResponse.substring(0, 200) || `${errorMessage}: ${res.statusText}`;
+              // JSON parse failed - don't use the parse error message, use the text
+              const parseErr = jsonError instanceof Error ? jsonError : new Error(String(jsonError));
+              console.error("Failed to parse JSON:", parseErr.message, "Response text:", textResponse.substring(0, 100));
+              
+              // Use text response if available, otherwise use a generic message
+              if (textResponse && textResponse.trim()) {
+                errorMessage = textResponse.substring(0, 200);
+              } else {
+                errorMessage = `${errorMessage}: ${res.statusText || "Invalid response format"}`;
+              }
             }
           } else {
             // Not JSON, use text response (truncate if too long)
@@ -1223,19 +1230,32 @@ export default function PaperTradingPage() {
           // Failed to read response at all
           const errMsg = readError instanceof Error ? readError.message : String(readError);
           console.error("Failed to read error response:", errMsg);
-          errorMessage = `${errorMessage}: ${res.statusText || "Failed to read response"}`;
+          // Don't use the read error message if it's a JSON parse error
+          if (errMsg.includes("JSON") || errMsg.includes("Unexpected end")) {
+            errorMessage = `${errorMessage}: ${res.statusText || "Empty or invalid response"}`;
+          } else {
+            errorMessage = `${errorMessage}: ${res.statusText || "Failed to read response"}`;
+          }
         }
         
         console.error("Final error message:", errorMessage);
         throw new Error(errorMessage);
       }
       
-      // Success - read response
+      // Success - read response (but don't fail if it's empty or invalid)
       try {
-        await res.json();
+        const text = await res.text();
+        if (text && text.trim()) {
+          try {
+            JSON.parse(text);
+          } catch {
+            // Not valid JSON, but that's okay for success responses
+            console.log("Success response was not JSON, continuing...");
+          }
+        }
       } catch {
         // Response might be empty or not JSON on success - that's okay
-        console.log("Success response was not JSON or empty, continuing...");
+        console.log("Success response was empty or invalid, continuing...");
       }
       await loadData();
       setTimeout(() => {

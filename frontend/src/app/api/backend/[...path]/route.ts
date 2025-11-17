@@ -96,12 +96,18 @@ export async function POST(
         // Empty success response
         data = { status: 'ok' };
       } else {
-        data = JSON.parse(text);
+        try {
+          data = JSON.parse(text);
+        } catch {
+          // Not valid JSON - return the text as a message
+          console.error('Backend returned non-JSON response:', text.substring(0, 100));
+          data = { status: 'ok', message: text.substring(0, 500) };
+        }
       }
     } catch (err) {
-      // Failed to parse - return empty object
-      console.error('Failed to parse backend response:', err);
-      data = {};
+      // Failed to read response - return success with note
+      console.error('Failed to read backend response:', err);
+      data = { status: 'ok', note: 'Response could not be read' };
     }
     return NextResponse.json(data);
   } catch (err: unknown) {
