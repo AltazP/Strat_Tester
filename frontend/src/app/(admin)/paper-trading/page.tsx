@@ -5,7 +5,12 @@ import Button from "@/components/ui/button/Button";
 import Badge from "@/components/ui/badge/Badge";
 import { ArrowUpIcon, ArrowDownIcon } from "@/icons";
 
-const BE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+const BE = "/api/backend";
+
+const getWebSocketUrl = () => {
+  const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:8000';
+  return backendUrl.replace("http", "ws") + "/paper-trading/ws/sessions";
+};
 
 type AccountInfo = {
   id: string;
@@ -904,7 +909,7 @@ export default function PaperTradingPage() {
   }, []);
   
   useEffect(() => {
-    const wsUrl = BE.replace("http", "ws") + "/paper-trading/ws/sessions";
+    const wsUrl = getWebSocketUrl();
     const ws = new WebSocket(wsUrl);
     
     ws.onopen = () => {

@@ -11,7 +11,7 @@ import { ArrowUpIcon, ArrowDownIcon, ChevronDownIcon } from "@/icons";
 
 const ReactApexChart = dynamic(() => import("react-apexcharts"), { ssr: false });
 
-const BE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
+const BE = "/api/backend";
 
 /* =============================
    Types
