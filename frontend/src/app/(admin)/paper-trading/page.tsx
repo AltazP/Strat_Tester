@@ -1183,39 +1183,59 @@ export default function PaperTradingPage() {
         const contentType = res.headers.get("content-type");
         
         try {
-          if (contentType && contentType.includes("application/json")) {
-            const errorData = await res.json();
-            console.error("Backend error response:", errorData);
-            
-            // Extract error message from various possible formats
-            if (typeof errorData === "string") {
-              errorMessage = errorData;
-            } else if (errorData?.detail) {
-              errorMessage = String(errorData.detail);
-            } else if (errorData?.message) {
-              errorMessage = String(errorData.message);
-            } else if (errorData?.error) {
-              errorMessage = String(errorData.error);
-            } else {
-              // Try to stringify the whole object
-              errorMessage = JSON.stringify(errorData);
+          // Read response as text first (can only read once)
+          const textResponse = await res.text();
+          
+          if (!textResponse || textResponse.trim() === "") {
+            // Empty response - use status info
+            errorMessage = `${errorMessage}: ${res.status} ${res.statusText || "Unknown error"}`;
+            console.error("Backend returned empty response:", res.status, res.statusText);
+          } else if (contentType && contentType.includes("application/json")) {
+            // Try to parse as JSON
+            try {
+              const errorData = JSON.parse(textResponse);
+              console.error("Backend error response:", errorData);
+              
+              // Extract error message from various possible formats
+              if (typeof errorData === "string") {
+                errorMessage = errorData;
+              } else if (errorData?.detail) {
+                errorMessage = String(errorData.detail);
+              } else if (errorData?.message) {
+                errorMessage = String(errorData.message);
+              } else if (errorData?.error) {
+                errorMessage = String(errorData.error);
+              } else {
+                // Try to stringify the whole object
+                errorMessage = JSON.stringify(errorData);
+              }
+            } catch (jsonError) {
+              // JSON parse failed, use text response
+              console.error("Failed to parse JSON, using text response:", jsonError);
+              errorMessage = textResponse || `${errorMessage}: ${res.status} ${res.statusText}`;
             }
           } else {
-            // Try to get text response
-            const textResponse = await res.text();
+            // Not JSON, use text response
             console.error("Backend error (non-JSON):", textResponse);
             errorMessage = textResponse || `${errorMessage}: ${res.status} ${res.statusText}`;
           }
-        } catch (parseError) {
-          console.error("Failed to parse error response:", parseError);
-          errorMessage = `${errorMessage}: ${res.status} ${res.statusText}`;
+        } catch (readError) {
+          // Failed to read response at all
+          console.error("Failed to read error response:", readError);
+          errorMessage = `${errorMessage}: ${res.status} ${res.statusText || "Unknown error"}`;
         }
         
         console.error("Extracted error message:", errorMessage);
         throw new Error(errorMessage);
       }
       
-      await res.json(); // Consume response
+      // Success - read response
+      try {
+        await res.json();
+      } catch (jsonError) {
+        // Response might be empty or not JSON on success - that's okay
+        console.log("Success response was not JSON or empty, continuing...");
+      }
       await loadData();
       setTimeout(() => {
         fetchTrades(sessionId);
