@@ -39,7 +39,7 @@ type PaperSession = {
   total_trades: number;
   winning_trades: number;
   losing_trades: number;
-  positions: Record<string, any>;
+  positions: Record<string, unknown>;
   open_trades_count: number;
   closed_trades_count: number;
   start_time: string | null;
@@ -53,8 +53,8 @@ type PaperSession = {
 type Strategy = {
   key: string;
   doc?: string;
-  params_schema?: any;
-  presets?: Record<string, any> | null;
+  params_schema?: Record<string, unknown>;
+  presets?: Record<string, unknown> | null;
 };
 
 type Position = {
