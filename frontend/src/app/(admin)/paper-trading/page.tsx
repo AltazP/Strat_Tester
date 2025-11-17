@@ -1179,18 +1179,18 @@ export default function PaperTradingPage() {
       });
       
       if (!res.ok) {
-        let errorMessage = "Failed to start session";
-        const contentType = res.headers.get("content-type");
+        let errorMessage = `Failed to start session (${res.status})`;
+        const contentType = res.headers.get("content-type") || "";
         
         try {
-          // Read response as text first (can only read once)
+          // Read response as text
           const textResponse = await res.text();
           
           if (!textResponse || textResponse.trim() === "") {
             // Empty response - use status info
-            errorMessage = `${errorMessage}: ${res.status} ${res.statusText || "Unknown error"}`;
+            errorMessage = `${errorMessage}: ${res.statusText || "Empty response"}`;
             console.error("Backend returned empty response:", res.status, res.statusText);
-          } else if (contentType && contentType.includes("application/json")) {
+          } else if (contentType.includes("application/json")) {
             // Try to parse as JSON
             try {
               const errorData = JSON.parse(textResponse);
@@ -1212,20 +1212,21 @@ export default function PaperTradingPage() {
             } catch (jsonError) {
               // JSON parse failed, use text response
               console.error("Failed to parse JSON, using text response:", jsonError);
-              errorMessage = textResponse || `${errorMessage}: ${res.status} ${res.statusText}`;
+              errorMessage = textResponse.substring(0, 200) || `${errorMessage}: ${res.statusText}`;
             }
           } else {
-            // Not JSON, use text response
-            console.error("Backend error (non-JSON):", textResponse);
-            errorMessage = textResponse || `${errorMessage}: ${res.status} ${res.statusText}`;
+            // Not JSON, use text response (truncate if too long)
+            console.error("Backend error (non-JSON):", textResponse.substring(0, 200));
+            errorMessage = textResponse.substring(0, 200) || `${errorMessage}: ${res.statusText}`;
           }
-        } catch (readError) {
+        } catch (readError: unknown) {
           // Failed to read response at all
-          console.error("Failed to read error response:", readError);
-          errorMessage = `${errorMessage}: ${res.status} ${res.statusText || "Unknown error"}`;
+          const errMsg = readError instanceof Error ? readError.message : String(readError);
+          console.error("Failed to read error response:", errMsg);
+          errorMessage = `${errorMessage}: ${res.statusText || "Failed to read response"}`;
         }
         
-        console.error("Extracted error message:", errorMessage);
+        console.error("Final error message:", errorMessage);
         throw new Error(errorMessage);
       }
       

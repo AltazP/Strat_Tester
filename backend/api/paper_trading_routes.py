@@ -223,15 +223,29 @@ async def start_session(session_id: str):
         logger.debug(f"Strategy params: {session.strategy_params}")
         await engine.start_session(session_id, strategy_class)
         session = engine.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found after start")
         logger.info(f"Session {session_id} started successfully with status {session.status}")
         return {"status": session.status.value, "session_id": session_id}
-    except Exception as e:
-        logger.error(f"Failed to start session {session_id}: {e}", exc_info=True)
-        # Set error status on session
+    except ValueError as e:
+        # ValueError from start_session (client creation, etc.)
+        error_msg = str(e)
+        logger.error(f"Failed to start session {session_id}: {error_msg}", exc_info=True)
         if session:
             session.status = TradingStatus.ERROR
-            session.error_message = str(e)
-        raise HTTPException(status_code=500, detail=str(e))
+            session.error_message = error_msg
+        raise HTTPException(status_code=400, detail=error_msg)
+    except HTTPException:
+        # Re-raise HTTPExceptions as-is
+        raise
+    except Exception as e:
+        # Catch-all for unexpected errors
+        error_msg = str(e)
+        logger.error(f"Unexpected error starting session {session_id}: {error_msg}", exc_info=True)
+        if session:
+            session.status = TradingStatus.ERROR
+            session.error_message = error_msg
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @router.post("/sessions/{session_id}/stop")
 async def stop_session(session_id: str):

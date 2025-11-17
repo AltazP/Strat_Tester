@@ -61,21 +61,53 @@ export async function POST(
     });
 
     if (!response.ok) {
-      const text = await response.text();
+      let text = '';
+      try {
+        text = await response.text();
+      } catch {
+        text = '';
+      }
+      
+      if (!text || text.trim() === '') {
+        // Empty response - return error with status
+        return NextResponse.json(
+          { detail: response.statusText || `Error ${response.status}` },
+          { status: response.status }
+        );
+      }
+      
       try {
         const json = JSON.parse(text);
         return NextResponse.json(json, { status: response.status });
       } catch {
-        return NextResponse.json({ error: text || response.statusText }, { status: response.status });
+        // Not valid JSON - return as error detail
+        return NextResponse.json(
+          { detail: text || response.statusText || `Error ${response.status}` },
+          { status: response.status }
+        );
       }
     }
 
-    const data = await response.json();
+    // Success response
+    let data;
+    try {
+      const text = await response.text();
+      if (!text || text.trim() === '') {
+        // Empty success response
+        data = { status: 'ok' };
+      } else {
+        data = JSON.parse(text);
+      }
+    } catch (err) {
+      // Failed to parse - return empty object
+      console.error('Failed to parse backend response:', err);
+      data = {};
+    }
     return NextResponse.json(data);
   } catch (err: unknown) {
     console.error('Backend proxy error:', err);
     return NextResponse.json(
-      { error: (err as Error).message || 'Backend request failed' },
+      { detail: (err as Error).message || 'Backend request failed' },
       { status: 500 }
     );
   }

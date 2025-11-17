@@ -185,6 +185,18 @@ class PaperTradingEngine:
         
         session.status = TradingStatus.STARTING
         session.start_time = datetime.now(timezone.utc)
+        session.error_message = None  # Clear any previous errors
+        
+        # Ensure client exists
+        if session_id not in self.clients:
+            logger.error(f"Client not found for session {session_id}, creating new client")
+            try:
+                self.clients[session_id] = OandaTradingClient(account_id=session.account_id)
+            except Exception as e:
+                logger.error(f"Failed to create OANDA client: {e}", exc_info=True)
+                session.status = TradingStatus.ERROR
+                session.error_message = f"Failed to create OANDA client: {str(e)}"
+                raise ValueError(f"Failed to create OANDA client: {str(e)}") from e
         
         # Get initial account balance
         client = self.clients[session_id]
@@ -202,8 +214,14 @@ class PaperTradingEngine:
         
         # Start trading loop in background
         # Strategy initialization happens in the trading loop where errors are handled gracefully
-        task = asyncio.create_task(self._trading_loop(session_id, strategy_class))
-        self.running_tasks[session_id] = task
+        try:
+            task = asyncio.create_task(self._trading_loop(session_id, strategy_class))
+            self.running_tasks[session_id] = task
+        except Exception as e:
+            logger.error(f"Failed to start trading loop: {e}", exc_info=True)
+            session.status = TradingStatus.ERROR
+            session.error_message = f"Failed to start trading loop: {str(e)}"
+            raise ValueError(f"Failed to start trading loop: {str(e)}") from e
         
         session.status = TradingStatus.RUNNING
         logger.info(f"Started paper trading session {session_id}")
