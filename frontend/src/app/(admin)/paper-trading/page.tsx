@@ -1232,7 +1232,7 @@ export default function PaperTradingPage() {
       // Success - read response
       try {
         await res.json();
-      } catch (jsonError) {
+      } catch {
         // Response might be empty or not JSON on success - that's okay
         console.log("Success response was not JSON or empty, continuing...");
       }
