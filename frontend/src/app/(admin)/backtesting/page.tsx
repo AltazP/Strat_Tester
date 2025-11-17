@@ -143,7 +143,7 @@ export default function BacktestingPage() {
   useEffect(() => {
     if (!strategy) return;
     setUserPresets(loadUserPresets(strategy));
-    const sp = stratInfo?.presets?.[instrument];
+    const sp = stratInfo?.presets?.[instrument] as Record<string, unknown> | undefined;
     if (sp) { setParams(sp); setPresetSelect(`server:${instrument}`); }
     else { const d = defaultsFromSchema(currentSchema); if (Object.keys(d).length) setParams(d); setPresetSelect("(none)"); }
     clearResults();
@@ -152,7 +152,7 @@ export default function BacktestingPage() {
 
   // instrument change
   useEffect(() => {
-    const sp = stratInfo?.presets?.[instrument];
+    const sp = stratInfo?.presets?.[instrument] as Record<string, unknown> | undefined;
     if (sp) { setParams(sp); setPresetSelect(`server:${instrument}`); }
     else if (presetSelect.startsWith("server:")) setPresetSelect("(none)");
     setPage(1);
@@ -595,8 +595,8 @@ export default function BacktestingPage() {
               onClick={() => {
                 if (presetSelect === "(none)") return;
                 const [src, name] = presetSelect.split(":");
-                if (src === "server") { const p = stratInfo?.presets?.[name]; if (p) setParams(p); }
-                else { const p = userPresets?.[name]; if (p) setParams(p); }
+                if (src === "server") { const p = stratInfo?.presets?.[name] as Record<string, unknown> | undefined; if (p) setParams(p); }
+                else { const p = userPresets?.[name] as Record<string, unknown> | undefined; if (p) setParams(p); }
                 toast("Preset applied!");
               }}
               disabled={presetSelect === "(none)"}
@@ -658,7 +658,8 @@ export default function BacktestingPage() {
               {Object.entries(currentSchema.properties as Record<string, { type?: string; default?: unknown; multipleOf?: number; minimum?: number; maximum?: number }>).map(([k, v]) => {
                 const type = v.type;
                 const isNum = type === "number" || type === "integer";
-                const fieldVal = params[k] ?? v.default ?? "";
+                const rawVal = params[k] ?? v.default ?? "";
+                const fieldVal = typeof rawVal === "string" || typeof rawVal === "number" ? String(rawVal) : "";
                 const step = v.multipleOf || (type === "integer" ? 1 : "any");
                 return (
                   <div key={k}>
@@ -686,7 +687,7 @@ export default function BacktestingPage() {
                 id="params-json"
                 className="w-full min-h-[100px] p-3 text-sm border border-gray-300 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-800 dark:text-white/90"
                   value={JSON.stringify(params, null, 2)}
-                  onChange={(e) => { try { setParams(JSON.parse(e.target.value)); } catch {} }}
+                  onChange={(e) => { try { setParams(JSON.parse(e.target.value) as Record<string, unknown>); } catch {} }}
                 />
             </div>
             )}

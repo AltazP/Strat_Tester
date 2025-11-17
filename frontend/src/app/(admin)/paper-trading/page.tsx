@@ -553,7 +553,7 @@ function AccountManagementModal({
   
   useEffect(() => {
     if (selectedPreset && selectedStrategy?.presets?.[selectedPreset]) {
-      setSelectedParams(selectedStrategy.presets[selectedPreset]);
+      setSelectedParams(selectedStrategy.presets[selectedPreset] as Record<string, unknown>);
     }
   }, [selectedPreset, selectedStrategy]);
   
@@ -704,19 +704,23 @@ function AccountManagementModal({
                     </div>
                   )}
                   
-                  {selectedStrategy?.params_schema?.properties && (
+                  {selectedStrategy?.params_schema?.properties ? (
                     <div className="space-y-3 p-4 rounded-lg bg-white dark:bg-gray-900">
                       <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Parameters</p>
                       <div className="grid grid-cols-2 gap-3">
-                        {Object.entries(selectedStrategy.params_schema.properties as Record<string, { type?: string; title?: string; default?: unknown }>).map(([key, schema]) => (
+                        {Object.entries(selectedStrategy.params_schema.properties as Record<string, { type?: string; title?: string; default?: unknown }>).map(([key, schema]) => {
+                          const rawValue = selectedParams[key];
+                          const displayValue = typeof rawValue === "string" || typeof rawValue === "number" ? String(rawValue) : "";
+                          const title = typeof schema.title === "string" ? schema.title : key;
+                          return (
                           <div key={key}>
                             <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
-                              {schema.title || key}
+                              {title}
                             </label>
                             <input
                               type={schema.type === "integer" || schema.type === "number" ? "number" : "text"}
                               className="w-full rounded-lg border border-stroke dark:border-strokedark bg-white dark:bg-gray-900 py-2 px-3 text-sm text-gray-800 dark:text-white/90 outline-none transition focus:border-primary"
-                              value={selectedParams[key] ?? ""}
+                              value={displayValue}
                               onChange={(e) => {
                                 const value = schema.type === "number" || schema.type === "integer" 
                                   ? parseFloat(e.target.value)
@@ -726,10 +730,11 @@ function AccountManagementModal({
                               step={schema.type === "number" ? "any" : undefined}
                             />
                           </div>
-                        ))}
+                        );
+                        })}
                       </div>
                     </div>
-                  )}
+                  ) : null}
                   
                   <div className="grid grid-cols-2 gap-4">
                     <div>
