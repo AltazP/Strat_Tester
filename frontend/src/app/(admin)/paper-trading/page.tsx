@@ -930,6 +930,13 @@ export default function PaperTradingPage() {
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void loadAccounts();
+    }, 15000);
+    return () => clearInterval(interval);
+  }, []);
   
   useEffect(() => {
     const wsUrl = getWebSocketUrl();
@@ -1017,8 +1024,6 @@ export default function PaperTradingPage() {
         fetch(`${BE}/paper-trading/sessions`),
         fetch(`${BE}/backtest/strategies`),
       ]);
-      setLastUpdateTime(Date.now());
-      setIsConnected(true);
       
       if (!accountsRes.ok || !sessionsRes.ok || !strategiesRes.ok) {
         throw new Error("Failed to fetch data");
@@ -1031,10 +1036,13 @@ export default function PaperTradingPage() {
       setAccounts(accountsData);
       setSessions(sessionsData);
       setStrategies(strategiesData.strategies || []);
+      setLastUpdateTime(Date.now());
+      setIsConnected(true);
       setError(null);
     } catch (err: unknown) {
       console.error("Error loading data:", err);
       setError((err as Error).message || "Failed to load data");
+      setIsConnected(false);
     } finally {
       setLoading(false);
     }
@@ -1044,12 +1052,16 @@ export default function PaperTradingPage() {
     try {
       const accountsRes = await fetch(`${BE}/paper-trading/accounts`);
       if (!accountsRes.ok) {
+        setIsConnected(false);
         return;
       }
       const accountsData = await accountsRes.json();
       setAccounts(accountsData);
+      setLastUpdateTime(Date.now());
+      setIsConnected(true);
     } catch {
       console.warn("loadAccounts skipped");
+      setIsConnected(false);
     }
   }
   
