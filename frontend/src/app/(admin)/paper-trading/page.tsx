@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useMemo } from "react";
 import Button from "@/components/ui/button/Button";
 import Badge from "@/components/ui/badge/Badge";
-import { ArrowUpIcon, ArrowDownIcon, CloseIcon } from "@/icons";
+import { ArrowUpIcon, ArrowDownIcon } from "@/icons";
 
 const BE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
 
@@ -25,7 +25,7 @@ type PaperSession = {
   session_id: string;
   account_id: string;
   strategy_name: string;
-  strategy_params: Record<string, any>;
+  strategy_params: Record<string, unknown>;
   instrument: string;
   granularity: string;
   status: string;
@@ -513,7 +513,7 @@ function AccountManagementModal({
   account: AccountInfo | null;
   sessions: PaperSession[];
   strategies: Strategy[];
-  onCreateSession: (data: any) => void;
+  onCreateSession: (data: Record<string, unknown>) => void;
   onStartSession: (sessionId: string) => void;
   onStopSession: (sessionId: string) => void;
   onPauseSession: (sessionId: string) => void;
@@ -523,7 +523,6 @@ function AccountManagementModal({
   trades: Record<string, { open: Trade[]; closed: Trade[] }>;
 }) {
   const [showCreateForm, setShowCreateForm] = useState(false);
-  const [selectedSession, setSelectedSession] = useState<PaperSession | null>(null);
   const [formData, setFormData] = useState({
     strategy_name: "",
     instrument: "EUR_USD",
@@ -531,15 +530,15 @@ function AccountManagementModal({
     max_position_size: 10000,
     max_daily_loss: 1000,
   });
-  const [selectedParams, setSelectedParams] = useState<Record<string, any>>({});
+  const [selectedParams, setSelectedParams] = useState<Record<string, unknown>>({});
   const [selectedPreset, setSelectedPreset] = useState<string>("");
   
   const selectedStrategy = strategies.find(s => s.key === formData.strategy_name);
   
   useEffect(() => {
     if (selectedStrategy?.params_schema?.properties) {
-      const defaults: Record<string, any> = {};
-      Object.entries(selectedStrategy.params_schema.properties).forEach(([key, schema]: [string, any]) => {
+      const defaults: Record<string, unknown> = {};
+      Object.entries(selectedStrategy.params_schema.properties as Record<string, { default?: unknown }>).forEach(([key, schema]) => {
         if (schema.default !== undefined) {
           defaults[key] = schema.default;
         }
@@ -563,7 +562,7 @@ function AccountManagementModal({
 
   const handleCreateSession = () => {
     const session_id = `${account.alias}_${Date.now()}`;
-    const sessionData: any = {
+    const sessionData: Record<string, unknown> = {
       session_id,
       account_id: account.id,
       strategy_name: formData.strategy_name,
@@ -706,7 +705,7 @@ function AccountManagementModal({
                     <div className="space-y-3 p-4 rounded-lg bg-white dark:bg-gray-900">
                       <p className="text-sm font-medium text-gray-700 dark:text-gray-300">Parameters</p>
                       <div className="grid grid-cols-2 gap-3">
-                        {Object.entries(selectedStrategy.params_schema.properties).map(([key, schema]: [string, any]) => (
+                        {Object.entries(selectedStrategy.params_schema.properties as Record<string, { type?: string; title?: string; default?: unknown }>).map(([key, schema]) => (
                           <div key={key}>
                             <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                               {schema.title || key}
@@ -988,9 +987,9 @@ export default function PaperTradingPage() {
       setSessions(sessionsData);
       setStrategies(strategiesData.strategies || []);
       setError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error loading data:", err);
-      setError(err.message || "Failed to load data");
+      setError((err as Error).message || "Failed to load data");
     } finally {
       setLoading(false);
     }
@@ -1004,8 +1003,8 @@ export default function PaperTradingPage() {
       }
       const accountsData = await accountsRes.json();
       setAccounts(accountsData);
-    } catch (err) {
-      console.warn("loadAccounts skipped:", err);
+    } catch {
+      console.warn("loadAccounts skipped");
     }
   }
   
@@ -1024,7 +1023,7 @@ export default function PaperTradingPage() {
         const data = await res.json();
         setPositions(prev => ({ ...prev, [sessionId]: data.positions || [] }));
       }
-    } catch (err) {
+    } catch {
     }
   }
   
@@ -1049,11 +1048,11 @@ export default function PaperTradingPage() {
           } 
         }));
       }
-    } catch (err) {
+    } catch {
     }
   }
   
-  async function createSession(data: any) {
+  async function createSession(data: Record<string, unknown>) {
     try {
       const res = await fetch(`${BE}/paper-trading/sessions`, {
         method: "POST",
@@ -1067,8 +1066,8 @@ export default function PaperTradingPage() {
       }
       
       await loadData();
-    } catch (err: any) {
-      alert(err.message || "Failed to create session");
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to create session");
     }
   }
   
@@ -1081,8 +1080,8 @@ export default function PaperTradingPage() {
         fetchTrades(sessionId);
         fetchPositions(sessionId);
       }, 2000);
-    } catch (err: any) {
-      alert(err.message || "Failed to start session");
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to start session");
     }
   }
   
@@ -1095,8 +1094,8 @@ export default function PaperTradingPage() {
         fetchTrades(sessionId);
         fetchPositions(sessionId);
       }, 2000);
-    } catch (err: any) {
-      alert(err.message || "Failed to stop session");
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to stop session");
     }
   }
   
@@ -1109,8 +1108,8 @@ export default function PaperTradingPage() {
         fetchTrades(sessionId);
         fetchPositions(sessionId);
       }, 2000);
-    } catch (err: any) {
-      alert(err.message || "Failed to pause session");
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to pause session");
     }
   }
   
@@ -1123,8 +1122,8 @@ export default function PaperTradingPage() {
         fetchTrades(sessionId);
         fetchPositions(sessionId);
       }, 2000);
-    } catch (err: any) {
-      alert(err.message || "Failed to resume session");
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to resume session");
     }
   }
   
@@ -1135,8 +1134,8 @@ export default function PaperTradingPage() {
       const res = await fetch(`${BE}/paper-trading/sessions/${sessionId}`, { method: "DELETE" });
       if (!res.ok) throw new Error("Failed to delete session");
       await loadData();
-    } catch (err: any) {
-      alert(err.message || "Failed to delete session");
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to delete session");
     }
   }
   
@@ -1208,7 +1207,7 @@ export default function PaperTradingPage() {
                 Connection Lost
               </p>
               <p className="text-xs text-gray-600 dark:text-gray-400">
-                Frontend hasn't received updates. Your strategy may still be running - check backend logs or OANDA account.
+                Frontend hasn&apos;t received updates. Your strategy may still be running - check backend logs or OANDA account.
               </p>
             </div>
           </div>

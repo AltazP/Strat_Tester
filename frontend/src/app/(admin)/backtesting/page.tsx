@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import DatePicker from "@/components/form/date-picker";
 import Label from "@/components/form/Label";
-import Input from "@/components/form/input/InputField";
 import Select from "@/components/form/Select";
 import Button from "@/components/ui/button/Button";
 import Badge from "@/components/ui/badge/Badge";
@@ -20,8 +19,8 @@ const BE = process.env.NEXT_PUBLIC_BACKEND_URL || "http://127.0.0.1:8000";
 type StrategyInfo = {
   key: string;
   doc?: string;
-  params_schema?: any;
-  presets?: Record<string, any> | null;
+  params_schema?: Record<string, unknown>;
+  presets?: Record<string, unknown> | null;
 };
 type Trade = {
   entry_ts: number; exit_ts: number;
@@ -40,18 +39,18 @@ type TimeMode = "lookback" | "range";
    Helpers
 ============================= */
 function lsKey(strategy: string) { return `presets:${strategy}`; }
-function loadUserPresets(strategy: string): Record<string, any> {
+function loadUserPresets(strategy: string): Record<string, unknown> {
   try { return JSON.parse(localStorage.getItem(lsKey(strategy)) || "{}"); } catch { return {}; }
 }
-function saveUserPreset(strategy: string, name: string, params: Record<string, any>) {
+function saveUserPreset(strategy: string, name: string, params: Record<string, unknown>) {
   const cur = loadUserPresets(strategy); cur[name] = params; localStorage.setItem(lsKey(strategy), JSON.stringify(cur));
 }
 function deleteUserPreset(strategy: string, name: string) {
   const cur = loadUserPresets(strategy); if (cur[name]) { delete cur[name]; localStorage.setItem(lsKey(strategy), JSON.stringify(cur)); }
 }
-function defaultsFromSchema(schema: any): Record<string, any> {
-  const out: Record<string, any> = {}; if (!schema?.properties) return out;
-  for (const [k, v] of Object.entries<any>(schema.properties)) if (v?.default !== undefined) out[k] = v.default;
+function defaultsFromSchema(schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {}; if (!schema?.properties) return out;
+  for (const [k, v] of Object.entries(schema.properties as Record<string, { default?: unknown }>)) if ((v as { default?: unknown })?.default !== undefined) out[k] = (v as { default: unknown }).default;
   return out;
 }
 
@@ -96,7 +95,7 @@ export default function BacktestingPage() {
   const [durationBars, setDurationBars] = useState<number>(1000);
 
   // results
-  const [params, setParams] = useState<Record<string, any>>({});
+  const [params, setParams] = useState<Record<string, unknown>>({});
   const [equity, setEquity] = useState<{ ts: number; equity: number }[]>([]);
   const [metrics, setMetrics] = useState<Record<string, number> | null>(null);
   const [derived, setDerived] = useState<Record<string, number> | null>(null);
@@ -105,7 +104,7 @@ export default function BacktestingPage() {
   const [errorText, setErrorText] = useState<string | null>(null);
 
   // presets
-  const [userPresets, setUserPresets] = useState<Record<string, any>>({});
+  const [userPresets, setUserPresets] = useState<Record<string, unknown>>({});
   const [presetSelect, setPresetSelect] = useState<string>("(none)");
 
   // UI
@@ -244,7 +243,7 @@ export default function BacktestingPage() {
     setLoading(true); setErrorText(null);
     clearResults();
 
-    const payload: any = { instrument, granularity, strategy, params, initial_equity: 10000 };
+    const payload: Record<string, unknown> = { instrument, granularity, strategy, params, initial_equity: 10000 };
 
     if (mode === "lookback") {
       payload.count = clamp(lookbackBars, 10, 5000);
@@ -300,9 +299,9 @@ export default function BacktestingPage() {
 
       setActiveTab("results");
       toast("Backtest complete!", "ok");
-    } catch (err: any) {
-      setErrorText(err?.message || "Backtest error");
-      toast(err?.message || "Backtest error", "error");
+    } catch (err: unknown) {
+      setErrorText((err as Error).message || "Backtest error");
+      toast((err as Error).message || "Backtest error", "error");
     } finally {
       setLoading(false);
     }
@@ -656,7 +655,7 @@ export default function BacktestingPage() {
           </h4>
             {currentSchema?.properties ? (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {Object.entries(currentSchema.properties).map(([k, v]: any) => {
+              {Object.entries(currentSchema.properties as Record<string, { type?: string; default?: unknown; multipleOf?: number; minimum?: number; maximum?: number }>).map(([k, v]) => {
                 const type = v.type;
                 const isNum = type === "number" || type === "integer";
                 const fieldVal = params[k] ?? v.default ?? "";
@@ -949,6 +948,7 @@ function StatCard({
 function EquityAreaChart({ series }: { series: { name: string; data: { x: number; y: number }[] }[] }) {
   const isDark = typeof document !== "undefined" && document.documentElement.classList.contains("dark");
   
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const options: any = {
     legend: { show: false },
     colors: ["#465FFF"],

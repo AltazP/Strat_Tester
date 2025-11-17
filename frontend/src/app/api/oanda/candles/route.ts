@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
 
     const data = await res.json(); // { candles: [...], instrument, granularity }
     return NextResponse.json(data);
-  } catch (err: any) {
-    return NextResponse.json({ error: err?.message || "Unknown error" }, { status: 500 });
+  } catch (err: unknown) {
+    return NextResponse.json({ error: (err as Error).message || "Unknown error" }, { status: 500 });
   }
 }
