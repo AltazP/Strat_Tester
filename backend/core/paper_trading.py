@@ -194,13 +194,26 @@ class PaperTradingEngine:
             session.current_balance = session.initial_balance
             session.equity = session.initial_balance
         except Exception as e:
-            logger.error(f"Failed to get account balance: {e}")
+            logger.error(f"Failed to get account balance: {e}", exc_info=True)
             session.status = TradingStatus.ERROR
-            session.error_message = str(e)
-            return
+            session.error_message = f"Failed to get account balance: {str(e)}"
+            raise ValueError(f"Failed to get account balance: {str(e)}") from e
         
-        # Start trading loop in background
-        task = asyncio.create_task(self._trading_loop(session_id, strategy_class))
+        # Initialize strategy synchronously to catch errors early
+        try:
+            logger.info(f"Initializing strategy {strategy_class.__name__} with params: {session.strategy_params}")
+            strategy = strategy_class(session.strategy_params)
+            ctx = BacktestContext(session.strategy_params)
+            strategy.on_start(ctx)
+            logger.info(f"Strategy initialized successfully for session {session_id}")
+        except Exception as e:
+            logger.error(f"Failed to initialize strategy: {e}", exc_info=True)
+            session.status = TradingStatus.ERROR
+            session.error_message = f"Strategy initialization failed: {str(e)}"
+            raise ValueError(f"Strategy initialization failed: {str(e)}") from e
+        
+        # Start trading loop in background (strategy already initialized)
+        task = asyncio.create_task(self._trading_loop(session_id, strategy_class, strategy, ctx))
         self.running_tasks[session_id] = task
         
         session.status = TradingStatus.RUNNING
@@ -279,23 +292,13 @@ class PaperTradingEngine:
             
             logger.info(f"Deleted paper trading session {session_id}")
     
-    async def _trading_loop(self, session_id: str, strategy_class: type[Strategy]):
+    async def _trading_loop(self, session_id: str, strategy_class: type[Strategy], strategy: Strategy, ctx: BacktestContext):
         """Main trading loop for a session."""
         session = self.sessions[session_id]
         client = self.clients[session_id]
         
-        # Initialize strategy
-        try:
-            logger.info(f"Initializing strategy {strategy_class.__name__} with params: {session.strategy_params}")
-            strategy = strategy_class(session.strategy_params)
-            ctx = BacktestContext(session.strategy_params)
-            strategy.on_start(ctx)
-            logger.info(f"Strategy initialized successfully for session {session_id}")
-        except Exception as e:
-            logger.error(f"Failed to initialize strategy: {e}", exc_info=True)
-            session.status = TradingStatus.ERROR
-            session.error_message = f"Strategy initialization failed: {str(e)}"
-            raise
+        # Strategy and context are already initialized in start_session
+        logger.debug(f"Trading loop started for session {session_id} with strategy {strategy_class.__name__}")
         
         # Get historical data for warmup
         try:

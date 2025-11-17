@@ -1166,13 +1166,24 @@ export default function PaperTradingPage() {
       
       if (!res.ok) {
         let errorMessage = "Failed to start session";
+        const contentType = res.headers.get("content-type");
+        
         try {
-          const errorData = await res.json();
-          errorMessage = errorData.detail || errorData.message || errorMessage;
-        } catch {
-          // If response isn't JSON, use status text
+          if (contentType && contentType.includes("application/json")) {
+            const errorData = await res.json();
+            errorMessage = errorData.detail || errorData.message || errorMessage;
+            console.error("Backend error response:", errorData);
+          } else {
+            // Try to get text response
+            const textResponse = await res.text();
+            console.error("Backend error (non-JSON):", textResponse);
+            errorMessage = textResponse || `${errorMessage}: ${res.status} ${res.statusText}`;
+          }
+        } catch (parseError) {
+          console.error("Failed to parse error response:", parseError);
           errorMessage = `${errorMessage}: ${res.status} ${res.statusText}`;
         }
+        
         throw new Error(errorMessage);
       }
       
