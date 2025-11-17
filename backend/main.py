@@ -4,11 +4,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv  # <-- add
 from api.routes import router as api_router
 from util.logging import setup_logging
+import logging
 
 # Load .env BEFORE anything uses os.getenv(...)
 load_dotenv()
 
 setup_logging()
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Strategy Lab API")
 
@@ -28,3 +30,18 @@ def ping():
 
 # mount your API
 app.include_router(api_router)
+
+@app.on_event("startup")
+async def startup_event():
+    """Run recovery logic on startup to handle orphaned positions."""
+    try:
+        from core.paper_trading import get_engine
+        engine = get_engine()
+        
+        # Check for orphaned positions (positions on OANDA but not tracked in sessions)
+        # Set auto_close=False to just log warnings, or True to auto-close on startup
+        # You can change this based on your preference
+        await engine.recover_orphaned_positions(auto_close=False)
+        logger.info("Startup recovery check completed")
+    except Exception as e:
+        logger.error(f"Error during startup recovery: {e}", exc_info=True)

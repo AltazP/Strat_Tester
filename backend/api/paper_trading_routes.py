@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 import json
 
@@ -25,7 +25,8 @@ class CreateSessionRequest(BaseModel):
     strategy_params: Dict[str, Any] = Field(default_factory=dict, description="Strategy parameters")
     instrument: str = Field(default="EUR_USD", description="Trading instrument")
     granularity: str = Field(default="M15", description="Candle granularity")
-    max_position_size: float = Field(default=10000, description="Maximum position size in units")
+    max_position_size: Optional[float] = Field(default=None, description="Maximum position size in units (if None, calculated from position_size_percent)")
+    position_size_percent: float = Field(default=1.0, description="Position size as % of account balance (default 1%)")
     max_daily_loss: float = Field(default=1000, description="Maximum daily loss")
 
 class UpdateSessionRequest(BaseModel):
@@ -139,11 +140,25 @@ async def get_account(account_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/sessions", response_model=SessionResponse)
-async def create_session(request: CreateSessionRequest, background_tasks: BackgroundTasks):
+async def create_session(request: CreateSessionRequest):
     """Create a new paper trading session."""
     engine = get_engine()
     
     try:
+        # Calculate max_position_size from percentage if not provided
+        max_position_size = request.max_position_size
+        if max_position_size is None:
+            # Get account balance to calculate position size
+            client = OandaTradingClient(account_id=request.account_id)
+            account = await client.get_account_summary(request.account_id)
+            balance = float(account.get("balance", 100000))
+            
+            # Calculate position size based on account balance
+            # For EUR/USD: 10,000 units = $1 per pip
+            # Formula: (balance * percent) / 10 gives units where 1% of $100k = 10,000 units
+            # This means: 1% of balance = ~$1 per pip risk (with 30 pip stop = ~$30 risk per trade)
+            max_position_size = (balance * request.position_size_percent) / 10
+        
         session = engine.create_session(
             session_id=request.session_id,
             account_id=request.account_id,
@@ -151,7 +166,7 @@ async def create_session(request: CreateSessionRequest, background_tasks: Backgr
             strategy_params=request.strategy_params,
             instrument=request.instrument,
             granularity=request.granularity,
-            max_position_size=request.max_position_size,
+            max_position_size=max_position_size,
             max_daily_loss=request.max_daily_loss,
         )
         
@@ -181,7 +196,7 @@ async def get_session(session_id: str):
     return SessionResponse(**session.to_dict())
 
 @router.post("/sessions/{session_id}/start")
-async def start_session(session_id: str, background_tasks: BackgroundTasks):
+async def start_session(session_id: str):
     """Start a paper trading session."""
     engine = get_engine()
     session = engine.get_session(session_id)
@@ -204,9 +219,9 @@ async def start_session(session_id: str, background_tasks: BackgroundTasks):
         )
     
     try:
-        # Start in background
-        background_tasks.add_task(engine.start_session, session_id, strategy_class)
-        return {"status": "starting", "session_id": session_id}
+        await engine.start_session(session_id, strategy_class)
+        session = engine.get_session(session_id)
+        return {"status": session.status.value, "session_id": session_id}
     except Exception as e:
         logger.error(f"Failed to start session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -294,8 +309,14 @@ async def get_session_trades(session_id: str):
     engine = get_engine()
     session = engine.get_session(session_id)
     
+    # Return empty arrays if session doesn't exist (e.g., after backend restart)
+    # This prevents 404 errors when frontend polls for non-existent sessions
     if not session:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        return {
+            "session_id": session_id,
+            "open_trades": [],
+            "closed_trades": [],
+        }
     
     return {
         "session_id": session_id,
@@ -309,8 +330,13 @@ async def get_session_positions(session_id: str):
     engine = get_engine()
     session = engine.get_session(session_id)
     
+    # Return empty array if session doesn't exist (e.g., after backend restart)
+    # This prevents 404 errors when frontend polls for non-existent sessions
     if not session:
-        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+        return {
+            "session_id": session_id,
+            "positions": [],
+        }
     
     return {
         "session_id": session_id,
@@ -378,6 +404,26 @@ async def list_granularities():
             {"value": "D", "label": "Daily"},
         ]
     }
+
+@router.post("/recover-positions")
+async def recover_positions(auto_close: bool = False):
+    """
+    Manually trigger position recovery to check for orphaned positions.
+    
+    Args:
+        auto_close: If True, automatically close orphaned positions.
+                   If False, just log warnings about them.
+    """
+    try:
+        engine = get_engine()
+        await engine.recover_orphaned_positions(auto_close=auto_close)
+        return {
+            "status": "success",
+            "message": f"Recovery check completed. auto_close={auto_close}"
+        }
+    except Exception as e:
+        logger.error(f"Failed to recover positions: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.websocket("/ws/sessions")
 async def websocket_sessions(websocket: WebSocket):
