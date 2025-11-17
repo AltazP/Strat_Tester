@@ -35,7 +35,14 @@ app.include_router(api_router)
 async def startup_event():
     """Run recovery logic on startup to handle orphaned positions."""
     try:
+        import os
         from core.paper_trading import get_engine
+        
+        # Only attempt recovery if OANDA credentials are properly configured
+        if not os.getenv("OANDA_PRACTICE_API_KEY"):
+            logger.warning("OANDA_PRACTICE_API_KEY not set - skipping position recovery")
+            return
+            
         engine = get_engine()
         
         # Check for orphaned positions (positions on OANDA but not tracked in sessions)

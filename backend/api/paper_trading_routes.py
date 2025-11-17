@@ -219,11 +219,18 @@ async def start_session(session_id: str):
         )
     
     try:
+        logger.info(f"Starting session {session_id} with strategy {session.strategy_name}")
+        logger.debug(f"Strategy params: {session.strategy_params}")
         await engine.start_session(session_id, strategy_class)
         session = engine.get_session(session_id)
+        logger.info(f"Session {session_id} started successfully with status {session.status}")
         return {"status": session.status.value, "session_id": session_id}
     except Exception as e:
-        logger.error(f"Failed to start session {session_id}: {e}")
+        logger.error(f"Failed to start session {session_id}: {e}", exc_info=True)
+        # Set error status on session
+        if session:
+            session.status = TradingStatus.ERROR
+            session.error_message = str(e)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/sessions/{session_id}/stop")

@@ -285,9 +285,17 @@ class PaperTradingEngine:
         client = self.clients[session_id]
         
         # Initialize strategy
-        strategy = strategy_class(session.strategy_params)
-        ctx = BacktestContext(session.strategy_params)
-        strategy.on_start(ctx)
+        try:
+            logger.info(f"Initializing strategy {strategy_class.__name__} with params: {session.strategy_params}")
+            strategy = strategy_class(session.strategy_params)
+            ctx = BacktestContext(session.strategy_params)
+            strategy.on_start(ctx)
+            logger.info(f"Strategy initialized successfully for session {session_id}")
+        except Exception as e:
+            logger.error(f"Failed to initialize strategy: {e}", exc_info=True)
+            session.status = TradingStatus.ERROR
+            session.error_message = f"Strategy initialization failed: {str(e)}"
+            raise
         
         # Get historical data for warmup
         try:
@@ -653,8 +661,9 @@ class PaperTradingEngine:
             if not account_id:
                 logger.info("OANDA_ACCOUNT_ID not set, attempting to discover accounts...")
                 try:
-                    client = OandaTradingClient()
-                    accounts = await client.get_accounts()
+                    # Create temporary client to list accounts
+                    temp_client = OandaTradingClient(account_id="")
+                    accounts = await temp_client.get_accounts()
                     if not accounts:
                         logger.warning("No OANDA accounts found, skipping position recovery")
                         return
