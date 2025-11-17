@@ -910,41 +910,50 @@ export default function PaperTradingPage() {
   
   useEffect(() => {
     const wsUrl = getWebSocketUrl();
-    const ws = new WebSocket(wsUrl);
     
-    ws.onopen = () => {
-      console.log("WebSocket connected");
-      setIsConnected(true);
-      setLastUpdateTime(Date.now());
-    };
-    
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === "sessions_update") {
-          setSessions(data.sessions);
-          setLastUpdateTime(Date.now());
-          setIsConnected(true);
+    try {
+      const ws = new WebSocket(wsUrl);
+      
+      ws.onopen = () => {
+        console.log("WebSocket connected");
+        setIsConnected(true);
+        setLastUpdateTime(Date.now());
+      };
+      
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "sessions_update") {
+            setSessions(data.sessions);
+            setLastUpdateTime(Date.now());
+            setIsConnected(true);
+          }
+        } catch (e) {
+          console.error("WebSocket error:", e);
         }
-      } catch (e) {
-        console.error("WebSocket error:", e);
-      }
-    };
-    
-    ws.onerror = () => {
+      };
+      
+      ws.onerror = (error) => {
+        console.warn("WebSocket connection error (will use polling instead):", error);
+        setIsConnected(false);
+      };
+      
+      ws.onclose = () => {
+        console.log("WebSocket closed");
+        setIsConnected(false);
+      };
+      
+      wsRef.current = ws;
+      
+      return () => {
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      };
+    } catch (error) {
+      console.warn("WebSocket not available (will use polling instead):", error);
       setIsConnected(false);
-    };
-    
-    ws.onclose = () => {
-      console.log("WebSocket closed");
-      setIsConnected(false);
-    };
-    
-    wsRef.current = ws;
-    
-    return () => {
-      ws.close();
-    };
+    }
   }, []);
   
   useEffect(() => {
