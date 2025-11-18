@@ -955,6 +955,7 @@ export default function LiveTradingPage() {
   );
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function LiveTradingPageOld() {
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [sessions, setSessions] = useState<PaperSession[]>([]);

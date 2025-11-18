@@ -7,7 +7,7 @@ import Link from "next/link";
 import React, { useState } from "react";
 
 const AppHeader: React.FC = () => {
-  const [isApplicationMenuOpen, setApplicationMenuOpen] = useState(false);
+  const [isApplicationMenuOpen] = useState(false);
 
   const { isMobileOpen, toggleSidebar, toggleMobileSidebar } = useSidebar();
 
@@ -19,9 +19,6 @@ const AppHeader: React.FC = () => {
     }
   };
 
-  const toggleApplicationMenu = () => {
-    setApplicationMenuOpen(!isApplicationMenuOpen);
-  };
 
   return (
     <header className="sticky top-0 flex w-full bg-white border-gray-200 z-[100] dark:border-gray-800 dark:bg-gray-900 lg:border-b">

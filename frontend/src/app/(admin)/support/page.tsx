@@ -1,8 +1,5 @@
 "use client";
 
-import Button from "@/components/ui/button/Button";
-import Link from "next/link";
-
 export default function SupportPage() {
   return (
     <div className="space-y-6">

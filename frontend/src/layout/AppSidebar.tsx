@@ -7,7 +7,6 @@ import { useSidebar } from "../context/SidebarContext";
 import {
   CalenderIcon,
   ChevronDownIcon,
-  GridIcon,
   HorizontaLDots,
   TableIcon,
   PageIcon,

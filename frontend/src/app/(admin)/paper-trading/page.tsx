@@ -547,7 +547,12 @@ function AccountManagementModal({
   onDeleteSession: (sessionId: string) => void;
   positions: Record<string, Position[]>;
   trades: Record<string, { open: Trade[]; closed: Trade[] }>;
-  accountPositions: any[];
+  accountPositions: Array<{
+    instrument: string;
+    long?: { units: string; averagePrice?: string };
+    short?: { units: string; averagePrice?: string };
+    unrealizedPL?: number | string;
+  }>;
   onFetchAccountPositions: (accountId: string) => void;
   onCloseAccountPosition: (accountId: string, instrument: string) => void;
 }) {
@@ -698,12 +703,12 @@ function AccountManagementModal({
               </div>
             ) : (
               <div className="space-y-3">
-                {accountPositions.map((pos: any) => {
+                {accountPositions.map((pos) => {
                   const instrument = pos.instrument || "UNKNOWN";
                   const longUnits = parseFloat(pos.long?.units || "0");
                   const shortUnits = parseFloat(pos.short?.units || "0");
                   const netUnits = longUnits - shortUnits;
-                  const unrealizedPL = parseFloat(pos.unrealizedPL || "0");
+                  const unrealizedPL = typeof pos.unrealizedPL === 'number' ? pos.unrealizedPL : parseFloat(String(pos.unrealizedPL || "0"));
                   const avgPrice = longUnits > 0 
                     ? parseFloat(pos.long?.averagePrice || "0")
                     : parseFloat(pos.short?.averagePrice || "0");
@@ -750,8 +755,9 @@ function AccountManagementModal({
                         </div>
                         <div className="ml-4">
                           <Button
-                            variant="error"
+                            variant="outline"
                             size="sm"
+                            className="text-red-600 border-red-300 hover:bg-red-50 hover:border-red-400 dark:text-red-400 dark:border-red-700 dark:hover:bg-red-500/10"
                             onClick={() => account && onCloseAccountPosition(account.id, instrument)}
                           >
                             Close Position
@@ -1028,7 +1034,12 @@ export default function PaperTradingPage() {
   const [selectedAccount, setSelectedAccount] = useState<AccountInfo | null>(null);
   const [positions, setPositions] = useState<Record<string, Position[]>>({});
   const [trades, setTrades] = useState<Record<string, { open: Trade[]; closed: Trade[] }>>({});
-  const [accountPositions, setAccountPositions] = useState<Record<string, any[]>>({});
+  const [accountPositions, setAccountPositions] = useState<Record<string, Array<{
+    instrument: string;
+    long?: { units: string; averagePrice?: string };
+    short?: { units: string; averagePrice?: string };
+    unrealizedPL?: number | string;
+  }>>>({});
   
   const [lastUpdateTime, setLastUpdateTime] = useState<number>(Date.now());
   const [isConnected, setIsConnected] = useState(true);
