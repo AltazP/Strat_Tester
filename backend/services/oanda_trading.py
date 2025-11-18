@@ -31,12 +31,27 @@ def _get_oanda_cfg() -> tuple[str, str]:
         )
     return host, key
 
+def _get_oanda_live_cfg() -> tuple[str, str]:
+    """Get OANDA live trading configuration from environment."""
+    host = (os.getenv("OANDA_LIVE_HOST") or "https://api-fxtrade.oanda.com").rstrip("/")
+    key = os.getenv("OANDA_LIVE_API_KEY")
+    if not key:
+        raise RuntimeError(
+            "OANDA_LIVE_API_KEY is not set. "
+            "Add it to backend/.env or export it in your shell."
+        )
+    return host, key
+
 class OandaTradingClient:
     """Full-featured OANDA trading client for paper trading."""
     
-    def __init__(self, account_id: Optional[str] = None):
-        self.host, self.api_key = _get_oanda_cfg()
-        self.account_id = account_id or os.getenv("OANDA_ACCOUNT_ID")
+    def __init__(self, account_id: Optional[str] = None, live: bool = False):
+        if live:
+            self.host, self.api_key = _get_oanda_live_cfg()
+            self.account_id = account_id or os.getenv("OANDA_LIVE_ACCOUNT_ID")
+        else:
+            self.host, self.api_key = _get_oanda_cfg()
+            self.account_id = account_id or os.getenv("OANDA_ACCOUNT_ID")
         self.headers = {"Authorization": f"Bearer {self.api_key}"}
         
     async def _request(self, method: str, endpoint: str, **kwargs) -> Dict:
@@ -157,18 +172,37 @@ class OandaTradingClient:
         self,
         instrument: str,
         account_id: Optional[str] = None,
-        long_units: str = "ALL",
-        short_units: str = "ALL"
+        long_units: Optional[str] = None,
+        short_units: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Close a position (or part of it)."""
+        """Close a position (or part of it).
+        
+        Args:
+            instrument: The instrument to close
+            account_id: Account ID (optional if set in client)
+            long_units: Units to close for long side ("ALL" or number as string, None to omit)
+            short_units: Units to close for short side ("ALL" or number as string, None to omit)
+        """
         acc_id = account_id or self.account_id
         if not acc_id:
             raise ValueError("No account_id provided")
         
+        # Build request body - only include fields that are specified
+        # OANDA requires at least one of longUnits or shortUnits
+        body: Dict[str, str] = {}
+        if long_units is not None:
+            body["longUnits"] = long_units
+        if short_units is not None:
+            body["shortUnits"] = short_units
+        
+        # If neither is specified, default to closing all
+        if not body:
+            body = {"longUnits": "ALL", "shortUnits": "ALL"}
+        
         data = await self._request(
             "PUT",
             f"/v3/accounts/{acc_id}/positions/{instrument}/close",
-            json={"longUnits": long_units, "shortUnits": short_units}
+            json=body
         )
         return data
     

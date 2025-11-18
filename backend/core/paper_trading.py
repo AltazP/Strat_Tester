@@ -168,7 +168,8 @@ class PaperTradingEngine:
         )
         
         self.sessions[session_id] = session
-        self.clients[session_id] = OandaTradingClient(account_id=account_id)
+        # Don't create client here - let routes create it with appropriate settings (live vs paper)
+        # Client will be created in start_session if needed
         
         logger.info(f"Created paper trading session {session_id}")
         return session

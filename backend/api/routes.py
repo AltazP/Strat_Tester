@@ -6,10 +6,12 @@ from feeds.random_walk import RandomWalkFeed
 from strategies.random_walk_strategy import RandomWalkStrategy
 from api.backtest_routes import router as backtest_router
 from api.paper_trading_routes import router as paper_trading_router
+from api.live_trading_routes import router as live_trading_router
 
 router = APIRouter()
 router.include_router(backtest_router)
 router.include_router(paper_trading_router)
+router.include_router(live_trading_router)
 manager = StrategyManager()
 
 class StartBody(BaseModel):

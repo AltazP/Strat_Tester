@@ -1,5 +1,5 @@
 """
-API Routes for Paper Trading
+API Routes for Live Trading
 """
 from __future__ import annotations
 import asyncio
@@ -14,7 +14,7 @@ from services.oanda_trading import OandaTradingClient
 from strategies.plugin_loader import load_strategies
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/paper-trading", tags=["paper-trading"])
+router = APIRouter(prefix="/live-trading", tags=["live-trading"])
 
 # ==================== REQUEST MODELS ====================
 
@@ -79,9 +79,9 @@ class AccountInfo(BaseModel):
 
 @router.get("/accounts", response_model=List[AccountInfo])
 async def list_accounts():
-    """List all available OANDA accounts."""
+    """List all available OANDA live accounts."""
     try:
-        client = OandaTradingClient()
+        client = OandaTradingClient(live=True)
         accounts = await client.get_accounts()
         
         result = []
@@ -112,14 +112,14 @@ async def list_accounts():
         
         return result
     except Exception as e:
-        logger.error(f"Failed to list accounts: {e}")
+        logger.error(f"Failed to list live accounts: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/accounts/{account_id}", response_model=AccountInfo)
 async def get_account(account_id: str):
-    """Get detailed information for a specific account."""
+    """Get detailed information for a specific live account."""
     try:
-        client = OandaTradingClient(account_id=account_id)
+        client = OandaTradingClient(account_id=account_id, live=True)
         details = await client.get_account_summary(account_id)
         
         return AccountInfo(
@@ -141,7 +141,7 @@ async def get_account(account_id: str):
 
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session(request: CreateSessionRequest):
-    """Create a new paper trading session."""
+    """Create a new live trading session."""
     engine = get_engine()
     
     try:
@@ -149,14 +149,11 @@ async def create_session(request: CreateSessionRequest):
         max_position_size = request.max_position_size
         if max_position_size is None:
             # Get account balance to calculate position size
-            client = OandaTradingClient(account_id=request.account_id)
+            client = OandaTradingClient(account_id=request.account_id, live=True)
             account = await client.get_account_summary(request.account_id)
             balance = float(account.get("balance", 100000))
             
             # Calculate position size based on account balance
-            # For EUR/USD: 10,000 units = $1 per pip
-            # Formula: (balance * percent) / 10 gives units where 1% of $100k = 10,000 units
-            # This means: 1% of balance = ~$1 per pip risk (with 30 pip stop = ~$30 risk per trade)
             max_position_size = (balance * request.position_size_percent) / 10
         
         session = engine.create_session(
@@ -170,24 +167,41 @@ async def create_session(request: CreateSessionRequest):
             max_daily_loss=request.max_daily_loss,
         )
         
+        # Store live flag in session metadata (we'll need to modify engine to support this)
+        # For now, we'll store it in a way that the engine can use
+        # Actually, we need to modify the engine to accept live flag when creating clients
+        # Let's store it in a separate dict for now
+        if not hasattr(engine, 'live_sessions'):
+            engine.live_sessions = set()
+        engine.live_sessions.add(request.session_id)
+        
         return SessionResponse(**session.to_dict())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Failed to create session: {e}")
+        logger.error(f"Failed to create live session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/sessions", response_model=List[SessionResponse])
 async def list_sessions():
-    """List all paper trading sessions."""
+    """List all live trading sessions."""
     engine = get_engine()
-    sessions = engine.list_sessions()
-    return [SessionResponse(**s.to_dict()) for s in sessions]
+    # Filter to only live sessions
+    if hasattr(engine, 'live_sessions'):
+        all_sessions = engine.list_sessions()
+        live_sessions = [s for s in all_sessions if s.session_id in engine.live_sessions]
+        return [SessionResponse(**s.to_dict()) for s in live_sessions]
+    return []
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str):
-    """Get details of a specific paper trading session."""
+    """Get details of a specific live trading session."""
     engine = get_engine()
+    
+    # Verify it's a live session
+    if hasattr(engine, 'live_sessions') and session_id not in engine.live_sessions:
+        raise HTTPException(status_code=404, detail=f"Live session {session_id} not found")
+    
     session = engine.get_session(session_id)
     
     if not session:
@@ -197,8 +211,13 @@ async def get_session(session_id: str):
 
 @router.post("/sessions/{session_id}/start")
 async def start_session(session_id: str):
-    """Start a paper trading session."""
+    """Start a live trading session."""
     engine = get_engine()
+    
+    # Verify it's a live session
+    if hasattr(engine, 'live_sessions') and session_id not in engine.live_sessions:
+        raise HTTPException(status_code=404, detail=f"Live session {session_id} not found")
+    
     session = engine.get_session(session_id)
     
     if not session:
@@ -218,30 +237,37 @@ async def start_session(session_id: str):
             detail=f"Strategy {session.strategy_name} not found"
         )
     
+    # Ensure client is created with live=True
+    if session_id not in engine.clients:
+        try:
+            engine.clients[session_id] = OandaTradingClient(account_id=session.account_id, live=True)
+        except Exception as e:
+            logger.error(f"Failed to create live OANDA client: {e}", exc_info=True)
+            session.status = TradingStatus.ERROR
+            session.error_message = f"Failed to create live OANDA client: {str(e)}"
+            raise HTTPException(status_code=400, detail=str(e))
+    
     try:
-        logger.info(f"Starting session {session_id} with strategy {session.strategy_name}")
+        logger.info(f"Starting live session {session_id} with strategy {session.strategy_name}")
         logger.debug(f"Strategy params: {session.strategy_params}")
         await engine.start_session(session_id, strategy_class)
         session = engine.get_session(session_id)
         if not session:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found after start")
-        logger.info(f"Session {session_id} started successfully with status {session.status}")
+        logger.info(f"Live session {session_id} started successfully with status {session.status}")
         return {"status": session.status.value, "session_id": session_id}
     except ValueError as e:
-        # ValueError from start_session (client creation, etc.)
         error_msg = str(e)
-        logger.error(f"Failed to start session {session_id}: {error_msg}", exc_info=True)
+        logger.error(f"Failed to start live session {session_id}: {error_msg}", exc_info=True)
         if session:
             session.status = TradingStatus.ERROR
             session.error_message = error_msg
         raise HTTPException(status_code=400, detail=error_msg)
     except HTTPException:
-        # Re-raise HTTPExceptions as-is
         raise
     except Exception as e:
-        # Catch-all for unexpected errors
         error_msg = str(e)
-        logger.error(f"Unexpected error starting session {session_id}: {error_msg}", exc_info=True)
+        logger.error(f"Unexpected error starting live session {session_id}: {error_msg}", exc_info=True)
         if session:
             session.status = TradingStatus.ERROR
             session.error_message = error_msg
@@ -249,8 +275,12 @@ async def start_session(session_id: str):
 
 @router.post("/sessions/{session_id}/stop")
 async def stop_session(session_id: str):
-    """Stop a paper trading session."""
+    """Stop a live trading session."""
     engine = get_engine()
+    
+    if hasattr(engine, 'live_sessions') and session_id not in engine.live_sessions:
+        raise HTTPException(status_code=404, detail=f"Live session {session_id} not found")
+    
     session = engine.get_session(session_id)
     
     if not session:
@@ -260,13 +290,17 @@ async def stop_session(session_id: str):
         await engine.stop_session(session_id)
         return {"status": "stopped", "session_id": session_id}
     except Exception as e:
-        logger.error(f"Failed to stop session {session_id}: {e}")
+        logger.error(f"Failed to stop live session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/sessions/{session_id}/pause")
 async def pause_session(session_id: str):
-    """Pause a paper trading session."""
+    """Pause a live trading session."""
     engine = get_engine()
+    
+    if hasattr(engine, 'live_sessions') and session_id not in engine.live_sessions:
+        raise HTTPException(status_code=404, detail=f"Live session {session_id} not found")
+    
     session = engine.get_session(session_id)
     
     if not session:
@@ -276,13 +310,17 @@ async def pause_session(session_id: str):
         await engine.pause_session(session_id)
         return {"status": "paused", "session_id": session_id}
     except Exception as e:
-        logger.error(f"Failed to pause session {session_id}: {e}")
+        logger.error(f"Failed to pause live session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/sessions/{session_id}/resume")
 async def resume_session(session_id: str):
-    """Resume a paused paper trading session."""
+    """Resume a paused live trading session."""
     engine = get_engine()
+    
+    if hasattr(engine, 'live_sessions') and session_id not in engine.live_sessions:
+        raise HTTPException(status_code=404, detail=f"Live session {session_id} not found")
+    
     session = engine.get_session(session_id)
     
     if not session:
@@ -292,31 +330,36 @@ async def resume_session(session_id: str):
         await engine.resume_session(session_id)
         return {"status": "running", "session_id": session_id}
     except Exception as e:
-        logger.error(f"Failed to resume session {session_id}: {e}")
+        logger.error(f"Failed to resume live session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.delete("/sessions/{session_id}")
 async def delete_session(session_id: str):
-    """Delete a paper trading session."""
+    """Delete a live trading session."""
     engine = get_engine()
     
     try:
+        if hasattr(engine, 'live_sessions'):
+            engine.live_sessions.discard(session_id)
         await engine.delete_session(session_id)
         return {"status": "deleted", "session_id": session_id}
     except Exception as e:
-        logger.error(f"Failed to delete session {session_id}: {e}")
+        logger.error(f"Failed to delete live session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.patch("/sessions/{session_id}", response_model=SessionResponse)
 async def update_session(session_id: str, request: UpdateSessionRequest):
-    """Update session parameters."""
+    """Update live session parameters."""
     engine = get_engine()
+    
+    if hasattr(engine, 'live_sessions') and session_id not in engine.live_sessions:
+        raise HTTPException(status_code=404, detail=f"Live session {session_id} not found")
+    
     session = engine.get_session(session_id)
     
     if not session:
         raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
     
-    # Update allowed fields
     if request.max_position_size is not None:
         session.max_position_size = request.max_position_size
     if request.max_daily_loss is not None:
@@ -326,12 +369,10 @@ async def update_session(session_id: str, request: UpdateSessionRequest):
 
 @router.get("/sessions/{session_id}/trades")
 async def get_session_trades(session_id: str):
-    """Get trade history for a session."""
+    """Get trade history for a live session."""
     engine = get_engine()
     session = engine.get_session(session_id)
     
-    # Return empty arrays if session doesn't exist (e.g., after backend restart)
-    # This prevents 404 errors when frontend polls for non-existent sessions
     if not session:
         return {
             "session_id": session_id,
@@ -347,12 +388,10 @@ async def get_session_trades(session_id: str):
 
 @router.get("/sessions/{session_id}/positions")
 async def get_session_positions(session_id: str):
-    """Get current positions for a session."""
+    """Get current positions for a live session."""
     engine = get_engine()
     session = engine.get_session(session_id)
     
-    # Return empty array if session doesn't exist (e.g., after backend restart)
-    # This prevents 404 errors when frontend polls for non-existent sessions
     if not session:
         return {
             "session_id": session_id,
@@ -387,7 +426,6 @@ async def close_position(session_id: str, instrument: str):
 @router.get("/instruments")
 async def list_instruments():
     """Get list of available trading instruments."""
-    # Common forex pairs
     return {
         "instruments": [
             {"symbol": "EUR_USD", "name": "EUR/USD", "type": "CURRENCY"},
@@ -426,98 +464,27 @@ async def list_granularities():
         ]
     }
 
-@router.get("/accounts/{account_id}/positions")
-async def get_account_positions(account_id: str):
-    """Get all open positions for an account (regardless of session status)."""
-    try:
-        client = OandaTradingClient(account_id=account_id)
-        positions = await client.get_positions(account_id)
-        return {
-            "account_id": account_id,
-            "positions": positions,
-        }
-    except Exception as e:
-        logger.error(f"Failed to get positions for account {account_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/accounts/{account_id}/positions/{instrument}/close")
-async def close_account_position(account_id: str, instrument: str):
-    """Close a position for an account (works even if session is closed)."""
-    try:
-        client = OandaTradingClient(account_id=account_id)
-        
-        # First, get the position to see if it's long or short
-        try:
-            position = await client.get_position(instrument, account_id)
-            long_units = float(position.get("long", {}).get("units", 0))
-            short_units = float(position.get("short", {}).get("units", 0))
-            
-            # Only close the side that has units - omit the other side entirely
-            # OANDA API doesn't accept "0" - we should omit fields we don't want to close
-            if long_units > 0 and short_units > 0:
-                # Both sides exist - close both
-                result = await client.close_position(instrument, account_id, long_units="ALL", short_units="ALL")
-            elif long_units > 0:
-                # Only long position - only include longUnits, omit shortUnits
-                result = await client.close_position(instrument, account_id, long_units="ALL", short_units=None)
-            elif short_units > 0:
-                # Only short position - only include shortUnits, omit longUnits
-                result = await client.close_position(instrument, account_id, long_units=None, short_units="ALL")
-            else:
-                raise HTTPException(status_code=400, detail="No open position found for this instrument")
-        except HTTPException:
-            raise
-        except Exception as e:
-            # If get_position fails, try closing both sides (fallback)
-            logger.warning(f"Could not get position details, attempting to close both sides: {e}")
-            result = await client.close_position(instrument, account_id)
-        
-        return {
-            "status": "closed",
-            "account_id": account_id,
-            "instrument": instrument,
-            "result": result,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to close position {instrument} for account {account_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/recover-positions")
-async def recover_positions(auto_close: bool = False):
-    """
-    Manually trigger position recovery to check for orphaned positions.
-    
-    Args:
-        auto_close: If True, automatically close orphaned positions.
-                   If False, just log warnings about them.
-    """
-    try:
-        engine = get_engine()
-        await engine.recover_orphaned_positions(auto_close=auto_close)
-        return {
-            "status": "success",
-            "message": f"Recovery check completed. auto_close={auto_close}"
-        }
-    except Exception as e:
-        logger.error(f"Failed to recover positions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 @router.websocket("/ws/sessions")
 async def websocket_sessions(websocket: WebSocket):
-    """WebSocket endpoint for real-time session updates."""
+    """WebSocket endpoint for real-time live session updates."""
     await websocket.accept()
     engine = get_engine()
     
     try:
         while True:
-            # Send all session updates every 2 seconds
-            sessions = engine.list_sessions()
-            data = {
-                "type": "sessions_update",
-                "sessions": [s.to_dict() for s in sessions]
-            }
+            # Send only live sessions
+            if hasattr(engine, 'live_sessions'):
+                all_sessions = engine.list_sessions()
+                live_sessions = [s for s in all_sessions if s.session_id in engine.live_sessions]
+                data = {
+                    "type": "sessions_update",
+                    "sessions": [s.to_dict() for s in live_sessions]
+                }
+            else:
+                data = {
+                    "type": "sessions_update",
+                    "sessions": []
+                }
             await websocket.send_text(json.dumps(data))
             await asyncio.sleep(2)
     except WebSocketDisconnect:
@@ -527,12 +494,20 @@ async def websocket_sessions(websocket: WebSocket):
 
 @router.websocket("/ws/sessions/{session_id}")
 async def websocket_session_detail(websocket: WebSocket, session_id: str):
-    """WebSocket endpoint for real-time updates of a specific session."""
+    """WebSocket endpoint for real-time updates of a specific live session."""
     await websocket.accept()
     engine = get_engine()
     
     try:
         while True:
+            # Verify it's a live session
+            if hasattr(engine, 'live_sessions') and session_id not in engine.live_sessions:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": f"Live session {session_id} not found"
+                }))
+                break
+            
             session = engine.get_session(session_id)
             if not session:
                 await websocket.send_text(json.dumps({
@@ -546,9 +521,9 @@ async def websocket_session_detail(websocket: WebSocket, session_id: str):
                 "session": session.to_dict()
             }
             await websocket.send_text(json.dumps(data))
-            await asyncio.sleep(1)  # More frequent updates for detail view
+            await asyncio.sleep(1)
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected for session {session_id}")
+        logger.info(f"WebSocket disconnected for live session {session_id}")
     except Exception as e:
-        logger.error(f"WebSocket error for session {session_id}: {e}")
+        logger.error(f"WebSocket error for live session {session_id}: {e}")
 
