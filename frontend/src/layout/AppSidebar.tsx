@@ -9,6 +9,8 @@ import {
   ChevronDownIcon,
   GridIcon,
   HorizontaLDots,
+  TableIcon,
+  PageIcon,
 } from "../icons/index";
 
 type NavItem = {
@@ -20,12 +22,12 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   {
-    icon: <CalenderIcon />,
+    icon: <TableIcon />,
     name: "Back Testing",
     path: "/backtesting",
   },
   {
-    icon: <CalenderIcon />,
+    icon: <PageIcon />,
     name: "Paper Trading",
     path: "/paper-trading",
   },
@@ -33,11 +35,6 @@ const navItems: NavItem[] = [
     icon: <CalenderIcon />,
     name: "Live Trading",
     path: "/live-trading",
-  },
-  {
-    icon: <GridIcon />,
-    name: "Strategies",
-    subItems: [{ name: "Ecommerce", path: "/", pro: false }],
   },
 ];
 
@@ -290,15 +287,15 @@ const AppSidebar: React.FC = () => {
                 className="dark:hidden"
                 src="/images/logo/logo.svg"
                 alt="Logo"
-                width={150}
-                height={40}
+                width={240}
+                height={64}
               />
               <Image
                 className="hidden dark:block"
                 src="/images/logo/logo-dark.svg"
                 alt="Logo"
-                width={150}
-                height={40}
+                width={240}
+                height={64}
               />
             </>
           ) : (
