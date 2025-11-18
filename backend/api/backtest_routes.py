@@ -6,8 +6,12 @@ from strategies.plugin_loader import REGISTRY
 from services.oanda import fetch_candles
 from backtest.engine import run_backtest
 import importlib
+import math
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])
+
+MAX_EQUITY_POINTS = 2000
+MAX_TRADES = 1000
 
 class RunBody(BaseModel):
     instrument: str = "EUR_USD"
@@ -22,6 +26,7 @@ class RunBody(BaseModel):
     slippage: float = 0.0
     fee_bps: float = 1.0
     initial_equity: float = 10000.0
+    compact: bool = Field(default=True, description="If True, downsample equity curve to reduce response size")
 
 @router.get("/strategies")
 async def strategies():
@@ -82,8 +87,16 @@ async def run(body: RunBody):
         
         trades = [{"entry_ts": t.entry_ts, "exit_ts": t.exit_ts,
                    "entry_px": t.entry_px, "exit_px": t.exit_px,
-                   "pnl": t.pnl} for t in res.trades]
-        return {"equity": res.equity, "trades": trades, "metrics": res.metrics}
+                   "pnl": t.pnl} for t in res.trades[-MAX_TRADES:]]
+        
+        equity = res.equity
+        if body.compact and len(equity) > MAX_EQUITY_POINTS:
+            step = math.ceil(len(equity) / MAX_EQUITY_POINTS)
+            equity = [equity[i] for i in range(0, len(equity), step)]
+            if equity[-1] != res.equity[-1]:
+                equity.append(res.equity[-1])
+        
+        return {"equity": equity, "trades": trades, "metrics": res.metrics}
     
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))

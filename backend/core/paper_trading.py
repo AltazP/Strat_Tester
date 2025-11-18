@@ -90,6 +90,9 @@ class PaperTradingSession:
     open_trades: Dict[str, Trade] = field(default_factory=dict)
     closed_trades: List[Trade] = field(default_factory=list)
     
+    # Track positions opened by this session (to distinguish from other sessions)
+    session_position_units: float = 0.0  # Net units this session has opened
+    
     # Timestamps
     start_time: Optional[datetime] = None
     last_update: Optional[datetime] = None
@@ -245,16 +248,78 @@ class PaperTradingEngine:
                 pass
             del self.running_tasks[session_id]
         
-        # Close all positions
+        # Only close positions opened by this session
+        # Check if there are other active sessions on the same account/instrument
+        other_sessions = [
+            s for s in self.sessions.values()
+            if s.account_id == session.account_id
+            and s.instrument == session.instrument
+            and s.session_id != session_id
+            and s.status == TradingStatus.RUNNING
+        ]
+        
         client = self.clients[session_id]
-        try:
-            positions = await client.get_positions(session.account_id)
-            for pos in positions:
-                instrument = pos.get("instrument")
-                if instrument:
-                    await client.close_position(instrument, session.account_id)
-        except Exception as e:
-            logger.error(f"Error closing positions: {e}")
+        if other_sessions:
+            # Other sessions exist - only close positions we opened
+            if abs(session.session_position_units) > 0:
+                try:
+                    # Get current positions to calculate what to close
+                    positions = await client.get_positions(session.account_id)
+                    for pos in positions:
+                        instrument = pos.get("instrument")
+                        if instrument == session.instrument:
+                            long_units = float(pos.get("long", {}).get("units", 0))
+                            short_units = float(pos.get("short", {}).get("units", 0))
+                            net_units = long_units - short_units
+                            
+                            # Calculate how much of this position belongs to us
+                            # Handle cases where positions might be opposite (one long, one short)
+                            if session.session_position_units > 0:
+                                # We opened long position
+                                if net_units > 0:
+                                    # Account has long - close our portion
+                                    close_units = min(session.session_position_units, net_units)
+                                    if close_units > 0:
+                                        await client.create_market_order(
+                                            instrument=session.instrument,
+                                            units=-close_units,
+                                            account_id=session.account_id
+                                        )
+                                        logger.info(f"Closed {close_units:.0f} units (session's long position) for {session_id}")
+                                elif net_units < 0:
+                                    # Account has short (other session) - we can't close our long
+                                    # This means our position was already closed or reversed
+                                    logger.warning(f"Cannot close {session.session_position_units:.0f} long units - account has {net_units:.0f} short (likely from other session)")
+                            elif session.session_position_units < 0:
+                                # We opened short position
+                                if net_units < 0:
+                                    # Account has short - close our portion
+                                    close_units = max(session.session_position_units, net_units)
+                                    if close_units < 0:
+                                        await client.create_market_order(
+                                            instrument=session.instrument,
+                                            units=abs(close_units),
+                                            account_id=session.account_id
+                                        )
+                                        logger.info(f"Closed {abs(close_units):.0f} units (session's short position) for {session_id}")
+                                elif net_units > 0:
+                                    # Account has long (other session) - we can't close our short
+                                    logger.warning(f"Cannot close {abs(session.session_position_units):.0f} short units - account has {net_units:.0f} long (likely from other session)")
+                            session.session_position_units = 0.0
+                            break
+                except Exception as e:
+                    logger.error(f"Error closing session positions: {e}")
+        else:
+            # No other sessions - close all positions for this instrument
+            try:
+                positions = await client.get_positions(session.account_id)
+                for pos in positions:
+                    instrument = pos.get("instrument")
+                    if instrument == session.instrument:
+                        await client.close_position(instrument, session.account_id)
+                session.session_position_units = 0.0
+            except Exception as e:
+                logger.error(f"Error closing positions: {e}")
         
         session.status = TradingStatus.STOPPED
         logger.info(f"Stopped paper trading session {session_id}")
@@ -310,29 +375,67 @@ class PaperTradingEngine:
             logger.info(f"Initializing strategy {strategy_class.__name__} with params: {session.strategy_params}")
             strategy = strategy_class(session.strategy_params)
             ctx = BacktestContext(session.strategy_params)
+            
+            # Sync context position with positions opened by THIS session only
+            # Check if there are other active sessions on the same account/instrument
+            other_sessions = [
+                s for s in self.sessions.values()
+                if s.account_id == session.account_id
+                and s.instrument == session.instrument
+                and s.session_id != session_id
+                and s.status == TradingStatus.RUNNING
+            ]
+            
+            if other_sessions:
+                # Other sessions exist - only sync with positions we opened
+                # Start from 0 and let strategy manage its own position independently
+                ctx.position = session.session_position_units / session.max_position_size if session.max_position_size > 0 else 0.0
+                logger.info(f"Other sessions active for {session.instrument} on account {session.account_id}. Starting {session_id} with session_position={session.session_position_units:.0f} units (ctx.position={ctx.position:.4f})")
+            else:
+                # No other sessions - safe to sync with all positions on OANDA
+                try:
+                    positions = await client.get_positions(session.account_id)
+                    for pos in positions:
+                        instrument = pos.get("instrument")
+                        if instrument == session.instrument:
+                            long_units = float(pos.get("long", {}).get("units", 0))
+                            short_units = float(pos.get("short", {}).get("units", 0))
+                            net_units = long_units - short_units
+                            if abs(net_units) > 0:
+                                ctx.position = net_units / session.max_position_size
+                                session.session_position_units = net_units
+                                logger.info(f"Synced existing position for {session_id}: {net_units} units (ctx.position={ctx.position:.4f})")
+                                break
+                except Exception as e:
+                    logger.warning(f"Failed to sync existing positions for {session_id}: {e}")
+            
             strategy.on_start(ctx)
             logger.info(f"Strategy initialized successfully for session {session_id}")
         except Exception as e:
             logger.error(f"Failed to initialize strategy: {e}", exc_info=True)
             session.status = TradingStatus.ERROR
             session.error_message = f"Strategy initialization failed: {str(e)}"
-            return  # Exit the trading loop if strategy init fails
+            return
         
         # Get historical data for warmup
+        # Note: We preserve ctx.position during warmup so strategy sees the synced position
         try:
             bars = await fetch_candles(
                 instrument=session.instrument,
                 granularity=session.granularity,
-                count=100  # warmup with last 100 bars
+                count=100
             )
             
-            # Run strategy on historical data
+            # Run strategy on historical data for warmup
+            # Preserve position so strategy sees the current state, not 0
+            warmup_start_position = ctx.position
             for bar in bars:
                 old_pos = ctx.position
                 strategy.on_bar(bar, ctx)
-                
-                # Don't execute historical signals
+                # Don't execute historical signals - reset to what we had
                 ctx.position = old_pos
+            # Restore the synced position after warmup
+            ctx.position = warmup_start_position
         except Exception as e:
             logger.error(f"Error during warmup: {e}")
         
@@ -387,17 +490,13 @@ class PaperTradingEngine:
                         
                         last_bar_time = latest_bar.ts
                         
-                        # Log when processing a new bar (helps verify strategy is running)
-                        logger.debug(f"Processing new bar for {session_id}: {session.instrument} @ {latest_bar.ts}")
-                        
-                        # Run strategy on the completed bar
                         old_position = ctx.position
                         strategy.on_bar(latest_bar, ctx)
                         new_position = ctx.position
                         
-                        # Execute trades if position changed
                         if old_position != new_position:
-                            logger.info(f"Position change for {session_id}: {old_position} → {new_position}")
+                            if abs(new_position - old_position) > 0.01:
+                                logger.info(f"Position change for {session_id}: {old_position:.2f} → {new_position:.2f}")
                             # Get current price for execution
                             pricing = await client.get_pricing(
                                 [session.instrument],
@@ -473,10 +572,11 @@ class PaperTradingEngine:
                 account_id=session.account_id
             )
             
-            logger.info(f"Executed order for {session_id}: {position_delta} units at ~{current_price}")
+            # Track the position change for this session
+            session.session_position_units += position_delta
             
-            # Don't increment total_trades here - it's recalculated from closed_trades + open_trades
-            # This ensures accuracy even if trades close before we track them
+            if abs(position_delta) > 100:
+                logger.info(f"Executed order for {session_id}: {position_delta:.0f} units at ~{current_price:.5f} (session total: {session.session_position_units:.0f})")
             
         except Exception as e:
             logger.error(f"Failed to execute order for {session_id}: {e}")
@@ -506,15 +606,15 @@ class PaperTradingEngine:
                 instrument = pos.get("instrument")
                 long_units = float(pos.get("long", {}).get("units", 0))
                 short_units = float(pos.get("short", {}).get("units", 0))
-                units = long_units + short_units
+                net_units = long_units - short_units
                 
-                if abs(units) > 0:
+                if abs(net_units) > 0:
                     avg_price = float(pos.get("long" if long_units != 0 else "short", {}).get("averagePrice", 0))
                     unrealized = float(pos.get("unrealizedPL", 0))
                     
                     session.positions[instrument] = Position(
                         instrument=instrument,
-                        units=units,
+                        units=net_units,
                         avg_price=avg_price,
                         unrealized_pl=unrealized,
                     )
@@ -629,10 +729,9 @@ class PaperTradingEngine:
             actual_winning = sum(1 for t in session.closed_trades if t.realized_pl > 0)
             actual_losing = sum(1 for t in session.closed_trades if t.realized_pl < 0)
             
-            # If we have closed trades but stats don't match, recalculate
             if len(session.closed_trades) > 0:
                 if session.winning_trades != actual_winning or session.losing_trades != actual_losing:
-                    logger.info(f"Recalculating win/loss stats for {session_id}: {actual_winning}W / {actual_losing}L")
+                    logger.debug(f"Recalculated win/loss stats for {session_id}: {actual_winning}W / {actual_losing}L")
                     session.winning_trades = actual_winning
                     session.losing_trades = actual_losing
             
