@@ -1383,7 +1383,10 @@ function LiveTradingPageOld() {
     );
   }
   
-  const totalUnrealizedPL = accounts.reduce((sum, acc) => sum + acc.unrealized_pl, 0);
+  // Calculate total P&L from all sessions (realized + unrealized) to match individual account cards
+  const totalRealizedPL = sessions.reduce((sum, s) => sum + s.realized_pl, 0);
+  const totalUnrealizedPL = sessions.reduce((sum, s) => sum + s.unrealized_pl, 0);
+  const totalPL = totalRealizedPL + totalUnrealizedPL;
   const totalPositions = accounts.reduce((sum, acc) => sum + acc.open_position_count, 0);
   const activeSessions = sessions.filter(s => s.status === "running").length;
   
@@ -1413,9 +1416,14 @@ function LiveTradingPageOld() {
         </div>
         <div className="p-5 rounded-xl border border-stroke dark:border-strokedark bg-white dark:bg-gray-900">
           <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Total P&L</p>
-          <p className={`text-3xl font-bold ${totalUnrealizedPL >= 0 ? 'text-gray-800 dark:text-white' : 'text-gray-800 dark:text-white'}`}>
-            {totalUnrealizedPL >= 0 ? '+' : ''}${totalUnrealizedPL.toFixed(2)}
+          <p className={`text-3xl font-bold ${totalPL >= 0 ? 'text-gray-800 dark:text-white' : 'text-gray-800 dark:text-white'}`}>
+            {totalPL >= 0 ? '+' : ''}${totalPL.toFixed(2)}
           </p>
+          {totalRealizedPL !== 0 && (
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+              Realized: {totalRealizedPL >= 0 ? '+' : ''}${totalRealizedPL.toFixed(2)}
+            </p>
+          )}
         </div>
       </div>
       
