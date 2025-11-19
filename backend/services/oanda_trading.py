@@ -53,14 +53,19 @@ class OandaTradingClient:
             self.host, self.api_key = _get_oanda_cfg()
             self.account_id = account_id or os.getenv("OANDA_ACCOUNT_ID")
         self.headers = {"Authorization": f"Bearer {self.api_key}"}
+        # Reuse a single HTTP client per instance to keep TLS sessions warm.
+        self._client = httpx.AsyncClient(timeout=30.0, headers=self.headers)
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP client."""
+        await self._client.aclose()
         
     async def _request(self, method: str, endpoint: str, **kwargs) -> Dict:
         """Make authenticated request to OANDA API."""
         url = f"{self.host}{endpoint}"
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.request(method, url, headers=self.headers, **kwargs)
-            response.raise_for_status()
-            return response.json()
+        response = await self._client.request(method, url, **kwargs)
+        response.raise_for_status()
+        return response.json()
     
     # ==================== ACCOUNT OPERATIONS ====================
     

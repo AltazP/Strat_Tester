@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field, asdict
@@ -109,6 +110,11 @@ class PaperTradingSession:
     max_daily_loss: float = 1000  # max daily loss in account currency
     daily_loss: float = 0.0
     
+    # Internal runtime helpers (excluded from serialization)
+    next_metrics_update: float = field(default=0.0, repr=False, compare=False)
+    next_bar_poll: float = field(default=0.0, repr=False, compare=False)
+    last_transaction_time: Optional[str] = field(default=None, repr=False, compare=False)
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -144,6 +150,14 @@ class PaperTradingEngine:
     """
     Manages paper trading sessions. Each session runs a strategy in real-time.
     """
+    
+    METRICS_REFRESH_SECONDS = 15
+    MIN_BAR_POLL_SECONDS = 5
+    MAX_BAR_POLL_SECONDS = 20
+    PAUSE_SLEEP_SECONDS = 5
+    IDLE_SLEEP_SECONDS = 1
+    MAX_CLOSED_TRADES = 200
+    TRANSACTION_PAGE_SIZE = 200
     
     def __init__(self):
         self.sessions: Dict[str, PaperTradingSession] = {}
@@ -196,6 +210,10 @@ class PaperTradingEngine:
         session.status = TradingStatus.STARTING
         session.start_time = datetime.now(timezone.utc)
         session.error_message = None  # Clear any previous errors
+        now = time.monotonic()
+        session.next_metrics_update = now
+        session.next_bar_poll = now
+        session.last_transaction_time = session.start_time.isoformat() if session.start_time else None
         
         # Ensure client exists
         if session_id not in self.clients:
@@ -348,6 +366,9 @@ class PaperTradingEngine:
         session = self.sessions[session_id]
         if session.status == TradingStatus.PAUSED:
             session.status = TradingStatus.RUNNING
+            now = time.monotonic()
+            session.next_metrics_update = now
+            session.next_bar_poll = now
             logger.info(f"Resumed paper trading session {session_id}")
     
     def get_session(self, session_id: str) -> Optional[PaperTradingSession]:
@@ -453,27 +474,42 @@ class PaperTradingEngine:
             "D": 86400,
         }
         bar_interval = granularity_seconds.get(session.granularity, 60)
+        bar_poll_interval = max(
+            self.MIN_BAR_POLL_SECONDS,
+            min(bar_interval / 2, self.MAX_BAR_POLL_SECONDS),
+        )
         
         # Track the last completed bar timestamp
         last_bar_time = 0.0
+        session.next_bar_poll = time.monotonic()
         
         # Main trading loop
         try:
             while session.status in [TradingStatus.RUNNING, TradingStatus.PAUSED]:
                 try:
-                    # Update account metrics every 10 seconds
-                    await self._update_account_metrics(session_id)
+                    now = time.monotonic()
+                    
+                    if now >= session.next_metrics_update:
+                        await self._update_account_metrics(session_id)
+                        session.next_metrics_update = now + self.METRICS_REFRESH_SECONDS
                     
                     # If paused, skip trading logic
                     if session.status == TradingStatus.PAUSED:
-                        await asyncio.sleep(5)
+                        await asyncio.sleep(self.PAUSE_SLEEP_SECONDS)
                         continue
                     
                     # Check risk limits
                     if session.daily_loss >= session.max_daily_loss:
                         logger.warning(f"Session {session_id} hit daily loss limit")
                         session.status = TradingStatus.PAUSED
+                        await asyncio.sleep(self.PAUSE_SLEEP_SECONDS)
                         continue
+                    
+                    if now < session.next_bar_poll:
+                        await asyncio.sleep(min(session.next_bar_poll - now, self.IDLE_SLEEP_SECONDS))
+                        continue
+                    
+                    session.next_bar_poll = now + bar_poll_interval
                     
                     # Fetch latest completed candle from OANDA
                     try:
@@ -484,14 +520,14 @@ class PaperTradingEngine:
                         )
                         
                         if not latest_bars:
-                            await asyncio.sleep(5)
+                            await asyncio.sleep(self.MIN_BAR_POLL_SECONDS)
                             continue
                         
                         latest_bar = latest_bars[-1]
                         
                         # Only process if this is a new bar
                         if latest_bar.ts <= last_bar_time:
-                            await asyncio.sleep(5)
+                            await asyncio.sleep(self.MIN_BAR_POLL_SECONDS)
                             continue
                         
                         last_bar_time = latest_bar.ts
@@ -524,20 +560,16 @@ class PaperTradingEngine:
                         
                     except Exception as e:
                         logger.error(f"Error fetching/processing candle: {e}")
-                        await asyncio.sleep(10)
+                        session.next_bar_poll = time.monotonic() + self.MIN_BAR_POLL_SECONDS
+                        await asyncio.sleep(self.MIN_BAR_POLL_SECONDS)
                         continue
-                    
-                    # Check for new bars more frequently than the bar interval
-                    # This ensures we catch new bars quickly
-                    check_interval = min(bar_interval / 4, 10)
-                    await asyncio.sleep(check_interval)
                     
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
                     logger.error(f"Error in trading loop for {session_id}: {e}")
                     session.error_message = str(e)
-                    await asyncio.sleep(10)
+                    await asyncio.sleep(self.MIN_BAR_POLL_SECONDS)
                     
         except asyncio.CancelledError:
             logger.info(f"Trading loop cancelled for {session_id}")
@@ -701,11 +733,14 @@ class PaperTradingEngine:
             # Get closed trades from transactions (if session has a start time)
             if session.start_time:
                 try:
+                    from_time = session.last_transaction_time or session.start_time.isoformat()
                     transactions = await client.get_transactions(
                         session.account_id,
-                        from_time=session.start_time.isoformat(),
-                        page_size=500
+                        from_time=from_time,
+                        page_size=self.TRANSACTION_PAGE_SIZE
                     )
+                    if transactions:
+                        session.last_transaction_time = transactions[-1].get("time", session.last_transaction_time)
                     
                     # Track which trades we've already seen as closed
                     existing_closed_ids = {t.id for t in session.closed_trades}
@@ -768,6 +803,8 @@ class PaperTradingEngine:
                                         realized_pl=pl,
                                     )
                                     session.closed_trades.append(closed_trade)
+                                    if len(session.closed_trades) > self.MAX_CLOSED_TRADES:
+                                        session.closed_trades = session.closed_trades[-self.MAX_CLOSED_TRADES:]
                                     
                                     # Update stats
                                     if pl > 0:
