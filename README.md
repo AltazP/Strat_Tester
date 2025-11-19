@@ -36,13 +36,19 @@ Stratify is a comprehensive trading strategy testing and execution platform that
 
 ### Video Tutorials
 **Backtest**
-https://github.com/user-attachments/assets/7e16c8d3-1ac0-4aec-9093-3355601d1f40
+
+https://github.com/user-attachments/assets/9ade0b78-0ed6-4943-a155-51897f0c82b7
+
 
 **Paper Trading**
-https://github.com/user-attachments/assets/403cb428-ca9e-4e6c-8d51-ee85b6772420
+
+https://github.com/user-attachments/assets/1ca2ad6e-9449-4b99-93f8-1ddcf1c23a8b
+
 
 **Live Trading**
-https://github.com/user-attachments/assets/f79c9e15-773f-403a-9ee8-d4539c628d18
+
+https://github.com/user-attachments/assets/69b2903b-cf22-4460-bba1-6f44d10fda3d
+
 
 
 ### Strategy Management
