@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 import json
+import httpx
 
 from core.paper_trading import get_engine, TradingStatus
 from services.oanda_trading import OandaTradingClient
@@ -446,7 +447,19 @@ async def close_account_position(account_id: str, instrument: str):
     try:
         client = OandaTradingClient(account_id=account_id)
         
-        # First, get the position to see if it's long or short
+        # First, check if the position actually exists by listing all positions
+        try:
+            all_positions = await client.get_positions(account_id)
+            position_exists = any(pos.get("instrument") == instrument for pos in all_positions)
+            
+            if not position_exists:
+                raise HTTPException(status_code=400, detail="No open position found for this instrument")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not list positions, will try to close anyway: {e}")
+        
+        # Get the position details to see if it's long or short
         try:
             position = await client.get_position(instrument, account_id)
             long_units = float(position.get("long", {}).get("units", 0))
@@ -467,10 +480,23 @@ async def close_account_position(account_id: str, instrument: str):
                 raise HTTPException(status_code=400, detail="No open position found for this instrument")
         except HTTPException:
             raise
-        except Exception as e:
-            # If get_position fails, try closing both sides (fallback)
-            logger.warning(f"Could not get position details, attempting to close both sides: {e}")
+        except httpx.HTTPStatusError as e:
+            # If get_position returns 404, the position doesn't exist
+            if e.response.status_code == 404:
+                raise HTTPException(status_code=400, detail="No open position found for this instrument")
+            # For other HTTP errors, try closing both sides as fallback
+            logger.warning(f"Could not get position details (HTTP {e.response.status_code}), attempting to close both sides: {e}")
             result = await client.close_position(instrument, account_id)
+        except Exception as e:
+            # If get_position fails for other reasons, try closing both sides (fallback)
+            logger.warning(f"Could not get position details, attempting to close both sides: {e}")
+            try:
+                result = await client.close_position(instrument, account_id)
+            except httpx.HTTPStatusError as close_err:
+                # If close also fails with 404, the position doesn't exist
+                if close_err.response.status_code == 404:
+                    raise HTTPException(status_code=400, detail="No open position found for this instrument")
+                raise
         
         return {
             "status": "closed",
