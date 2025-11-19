@@ -534,6 +534,9 @@ function AccountManagementModal({
   onDeleteSession,
   positions,
   trades,
+  accountPositions,
+  onFetchAccountPositions,
+  onCloseAccountPosition,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -548,6 +551,14 @@ function AccountManagementModal({
   onDeleteSession: (sessionId: string) => void;
   positions: Record<string, Position[]>;
   trades: Record<string, { open: Trade[]; closed: Trade[] }>;
+  accountPositions: Array<{
+    instrument: string;
+    long?: { units: string; averagePrice?: string };
+    short?: { units: string; averagePrice?: string };
+    unrealizedPL?: number | string;
+  }>;
+  onFetchAccountPositions: (accountId: string) => void;
+  onCloseAccountPosition: (accountId: string, instrument: string) => void;
 }) {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [formData, setFormData] = useState({
@@ -580,6 +591,12 @@ function AccountManagementModal({
       setSelectedParams(selectedStrategy.presets[selectedPreset] as Record<string, unknown>);
     }
   }, [selectedPreset, selectedStrategy]);
+  
+  useEffect(() => {
+    if (isOpen && account) {
+      onFetchAccountPositions(account.id);
+    }
+  }, [isOpen, account, onFetchAccountPositions]);
   
   if (!isOpen || !account) return null;
   
@@ -668,6 +685,93 @@ function AccountManagementModal({
                 ${account.margin_available.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
             </div>
+          </div>
+          
+          {/* Account Positions Section */}
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold text-gray-800 dark:text-white/90">Account Positions</h3>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => account && onFetchAccountPositions(account.id)}
+              >
+                Refresh
+              </Button>
+            </div>
+            
+            {accountPositions.length === 0 ? (
+              <div className="text-center py-8 border-2 border-dashed border-stroke dark:border-strokedark rounded-xl bg-gray-50 dark:bg-gray-900">
+                <p className="text-gray-500 dark:text-gray-400">No open positions</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {accountPositions.map((pos) => {
+                  const instrument = pos.instrument || "UNKNOWN";
+                  const longUnits = parseFloat(pos.long?.units || "0");
+                  const shortUnits = parseFloat(pos.short?.units || "0");
+                  const netUnits = longUnits - shortUnits;
+                  const unrealizedPL = typeof pos.unrealizedPL === 'number' ? pos.unrealizedPL : parseFloat(String(pos.unrealizedPL || "0"));
+                  const avgPrice = longUnits > 0 
+                    ? parseFloat(pos.long?.averagePrice || "0")
+                    : parseFloat(pos.short?.averagePrice || "0");
+                  
+                  return (
+                    <div 
+                      key={instrument}
+                      className="p-4 rounded-xl border border-stroke dark:border-strokedark bg-white dark:bg-gray-900"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h4 className="text-lg font-semibold text-gray-800 dark:text-white/90">
+                              {instrument}
+                            </h4>
+                            <Badge 
+                              color={netUnits > 0 ? "success" : netUnits < 0 ? "error" : "light"}
+                              variant="solid"
+                              size="sm"
+                            >
+                              {netUnits > 0 ? "LONG" : netUnits < 0 ? "SHORT" : "FLAT"}
+                            </Badge>
+                          </div>
+                          <div className="grid grid-cols-3 gap-4 text-sm">
+                            <div>
+                              <p className="text-gray-500 dark:text-gray-400">Units</p>
+                              <p className="font-semibold text-gray-800 dark:text-white/90">
+                                {netUnits > 0 ? "+" : ""}{netUnits.toLocaleString()}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-gray-500 dark:text-gray-400">Avg Price</p>
+                              <p className="font-semibold text-gray-800 dark:text-white/90">
+                                {avgPrice.toFixed(5)}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-gray-500 dark:text-gray-400">Unrealized P&L</p>
+                              <p className={`font-semibold ${unrealizedPL >= 0 ? "text-success" : "text-error"}`}>
+                                {unrealizedPL >= 0 ? "+" : ""}{unrealizedPL.toFixed(2)}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="ml-4">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-red-600 border-red-300 hover:bg-red-50 hover:border-red-400 dark:text-red-400 dark:border-red-700 dark:hover:bg-red-500/10"
+                            onClick={() => account && onCloseAccountPosition(account.id, instrument)}
+                          >
+                            Close Position
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
           
           <div>
@@ -1052,6 +1156,12 @@ function LiveTradingPageOld() {
   const [selectedAccount, setSelectedAccount] = useState<AccountInfo | null>(null);
   const [positions, setPositions] = useState<Record<string, Position[]>>({});
   const [trades, setTrades] = useState<Record<string, { open: Trade[]; closed: Trade[] }>>({});
+  const [accountPositions, setAccountPositions] = useState<Record<string, Array<{
+    instrument: string;
+    long?: { units: string; averagePrice?: string };
+    short?: { units: string; averagePrice?: string };
+    unrealizedPL?: number | string;
+  }>>>({});
   
   const [lastUpdateTime, setLastUpdateTime] = useState<number>(Date.now());
   const [isConnected, setIsConnected] = useState(true);
@@ -1272,6 +1382,41 @@ function LiveTradingPageOld() {
         }));
       }
     } catch {
+    }
+  }
+  
+  async function fetchAccountPositions(accountId: string) {
+    try {
+      const res = await fetch(`${BE}/live-trading/accounts/${accountId}/positions`);
+      if (res.ok) {
+        const data = await res.json();
+        setAccountPositions(prev => ({ ...prev, [accountId]: data.positions || [] }));
+      }
+    } catch (err) {
+      console.error("Failed to fetch account positions:", err);
+    }
+  }
+  
+  async function closeAccountPosition(accountId: string, instrument: string) {
+    if (!confirm(`Are you sure you want to close the position for ${instrument}?`)) {
+      return;
+    }
+    
+    try {
+      const res = await fetch(`${BE}/live-trading/accounts/${accountId}/positions/${instrument}/close`, {
+        method: "POST",
+      });
+      
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({ detail: "Failed to close position" }));
+        throw new Error(error.detail || "Failed to close position");
+      }
+      
+      // Refresh account positions after closing
+      await fetchAccountPositions(accountId);
+      await loadAccounts();
+    } catch (err: unknown) {
+      alert((err as Error).message || "Failed to close position");
     }
   }
   
@@ -1583,6 +1728,9 @@ function LiveTradingPageOld() {
         onDeleteSession={deleteSession}
         positions={positions}
         trades={trades}
+        accountPositions={accountPositions[selectedAccount?.id || ""] || []}
+        onFetchAccountPositions={fetchAccountPositions}
+        onCloseAccountPosition={closeAccountPosition}
       />
     </div>
   );

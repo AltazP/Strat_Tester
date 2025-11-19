@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 import json
+import httpx
 
 from core.paper_trading import get_engine, TradingStatus
 from services.oanda_trading import OandaTradingClient
@@ -431,6 +432,89 @@ async def close_position(session_id: str, instrument: str):
         return {"status": "closed", "instrument": instrument, "result": result}
     except Exception as e:
         logger.error(f"Failed to close position: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/accounts/{account_id}/positions")
+async def get_account_positions(account_id: str):
+    """Get all open positions for a live account (regardless of session status)."""
+    try:
+        client = OandaTradingClient(account_id=account_id, live=True)
+        positions = await client.get_positions(account_id)
+        return {
+            "account_id": account_id,
+            "positions": positions,
+        }
+    except Exception as e:
+        logger.error(f"Failed to get positions for live account {account_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/accounts/{account_id}/positions/{instrument}/close")
+async def close_account_position(account_id: str, instrument: str):
+    """Close a position for a live account (works even if session is closed)."""
+    try:
+        client = OandaTradingClient(account_id=account_id, live=True)
+        
+        # First, check if the position actually exists by listing all positions
+        try:
+            all_positions = await client.get_positions(account_id)
+            position_exists = any(pos.get("instrument") == instrument for pos in all_positions)
+            
+            if not position_exists:
+                raise HTTPException(status_code=400, detail="No open position found for this instrument")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not list positions, will try to close anyway: {e}")
+        
+        # Get the position details to see if it's long or short
+        try:
+            position = await client.get_position(instrument, account_id)
+            long_units = float(position.get("long", {}).get("units", 0))
+            short_units = float(position.get("short", {}).get("units", 0))
+            
+            # Only close the side that has units - omit the other side entirely
+            # OANDA API doesn't accept "0" - we should omit fields we don't want to close
+            if long_units > 0 and short_units > 0:
+                # Both sides exist - close both
+                result = await client.close_position(instrument, account_id, long_units="ALL", short_units="ALL")
+            elif long_units > 0:
+                # Only long position - only include longUnits, omit shortUnits
+                result = await client.close_position(instrument, account_id, long_units="ALL", short_units=None)
+            elif short_units > 0:
+                # Only short position - only include shortUnits, omit longUnits
+                result = await client.close_position(instrument, account_id, long_units=None, short_units="ALL")
+            else:
+                raise HTTPException(status_code=400, detail="No open position found for this instrument")
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as e:
+            # If get_position returns 404, the position doesn't exist
+            if e.response.status_code == 404:
+                raise HTTPException(status_code=400, detail="No open position found for this instrument")
+            # For other HTTP errors, try closing both sides as fallback
+            logger.warning(f"Could not get position details (HTTP {e.response.status_code}), attempting to close both sides: {e}")
+            result = await client.close_position(instrument, account_id)
+        except Exception as e:
+            # If get_position fails for other reasons, try closing both sides (fallback)
+            logger.warning(f"Could not get position details, attempting to close both sides: {e}")
+            try:
+                result = await client.close_position(instrument, account_id)
+            except httpx.HTTPStatusError as close_err:
+                # If close also fails with 404, the position doesn't exist
+                if close_err.response.status_code == 404:
+                    raise HTTPException(status_code=400, detail="No open position found for this instrument")
+                raise
+        
+        return {
+            "status": "closed",
+            "account_id": account_id,
+            "instrument": instrument,
+            "result": result,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to close position {instrument} for live account {account_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/instruments")
