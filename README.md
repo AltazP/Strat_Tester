@@ -41,6 +41,7 @@ Stratify is a comprehensive trading strategy testing and execution platform that
   - Mean Reversion
   - Alpha Fusion
 - Plugin-based architecture for custom strategies
+  - Follow the template in base.py and any example strategy
 - Strategy parameter customization
 - Preset configurations
 
