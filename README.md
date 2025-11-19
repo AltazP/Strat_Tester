@@ -34,6 +34,17 @@ Stratify is a comprehensive trading strategy testing and execution platform that
 - Real-time monitoring and alerts
 - **Live Trading Toggle Switch**: Access live trading features via the Settings menu in the header. Use the "Enable Live Trading" toggle to enable/disable access to live trading functionality. When enabled, you'll be redirected to the Live Trading page where you can manage live trading sessions with real OANDA accounts.
 
+### Video Tutorials
+**Backtest**
+https://github.com/user-attachments/assets/7e16c8d3-1ac0-4aec-9093-3355601d1f40
+
+**Paper Trading**
+https://github.com/user-attachments/assets/403cb428-ca9e-4e6c-8d51-ee85b6772420
+
+**Live Trading**
+https://github.com/user-attachments/assets/f79c9e15-773f-403a-9ee8-d4539c628d18
+
+
 ### Strategy Management
 - Multiple built-in strategies:
   - Custom EMA Strategy
