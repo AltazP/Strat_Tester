@@ -49,6 +49,8 @@ class Trade:
     realized_pl: float = 0.0
     
     def to_dict(self) -> Dict[str, Any]:
+        # For open trades, realized_pl contains unrealized_pl
+        # For closed trades, realized_pl contains the actual realized P&L
         return {
             "id": self.id,
             "instrument": self.instrument,
@@ -58,6 +60,7 @@ class Trade:
             "close_price": self.close_price,
             "units": self.units,
             "realized_pl": self.realized_pl,
+            "unrealized_pl": 0.0 if self.close_time else self.realized_pl,
         }
 
 @dataclass
@@ -92,6 +95,9 @@ class PaperTradingSession:
     
     # Track positions opened by this session (to distinguish from other sessions)
     session_position_units: float = 0.0  # Net units this session has opened
+    
+    # Track trade IDs that belong to this session (to filter trades from account)
+    session_trade_ids: set[str] = field(default_factory=set)
     
     # Timestamps
     start_time: Optional[datetime] = None
@@ -572,6 +578,26 @@ class PaperTradingEngine:
                 account_id=session.account_id
             )
             
+            # Track trade IDs from the order result
+            # OANDA returns orderFillTransaction with tradeOpened or tradeReduced
+            if result and "orderFillTransaction" in result:
+                fill_tx = result["orderFillTransaction"]
+                # Check for tradeOpened (new trade)
+                if "tradeOpened" in fill_tx:
+                    trade_id = fill_tx["tradeOpened"].get("tradeID")
+                    if trade_id:
+                        session.session_trade_ids.add(str(trade_id))
+                # Check for tradeReduced (partial close) - track the trade ID
+                if "tradeReduced" in fill_tx:
+                    trade_id = fill_tx["tradeReduced"].get("tradeID")
+                    if trade_id:
+                        session.session_trade_ids.add(str(trade_id))
+                # Also check relatedTransactionIds for trade IDs
+                if "relatedTransactionIDs" in fill_tx:
+                    for tx_id in fill_tx["relatedTransactionIDs"]:
+                        # These might be trade IDs, but we'll verify from trades list
+                        pass
+            
             # Track the position change for this session
             session.session_position_units += position_delta
             
@@ -632,17 +658,42 @@ class PaperTradingEngine:
             for trade in trades:
                 trade_id = trade.get("id")
                 if trade_id:
-                    current_open_trade_ids.add(trade_id)
-                    session.open_trades[trade_id] = Trade(
-                        id=trade_id,
-                        instrument=trade.get("instrument"),
-                        open_time=datetime.fromisoformat(trade.get("openTime", "").replace("Z", "+00:00")),
-                        close_time=None,
-                        open_price=float(trade.get("price", 0)),
-                        close_price=None,
-                        units=float(trade.get("currentUnits", 0)),
-                        realized_pl=float(trade.get("realizedPL", 0)),
-                    )
+                    trade_id_str = str(trade_id)
+                    instrument = trade.get("instrument")
+                    
+                    # Only track trades that belong to this session
+                    # Filter by: 1) trade ID is in our session_trade_ids, OR
+                    #            2) instrument matches AND trade was opened after session started
+                    belongs_to_session = False
+                    
+                    if trade_id_str in session.session_trade_ids:
+                        belongs_to_session = True
+                    elif instrument == session.instrument and session.start_time:
+                        # Check if trade was opened after session started
+                        open_time_str = trade.get("openTime", "")
+                        if open_time_str:
+                            try:
+                                trade_open_time = datetime.fromisoformat(open_time_str.replace("Z", "+00:00"))
+                                if trade_open_time >= session.start_time:
+                                    belongs_to_session = True
+                                    # Add to session_trade_ids for future tracking
+                                    session.session_trade_ids.add(trade_id_str)
+                            except Exception:
+                                pass
+                    
+                    if belongs_to_session:
+                        current_open_trade_ids.add(trade_id_str)
+                        unrealized_pl = float(trade.get("unrealizedPL", 0))
+                        session.open_trades[trade_id_str] = Trade(
+                            id=trade_id_str,
+                            instrument=instrument,
+                            open_time=datetime.fromisoformat(open_time_str.replace("Z", "+00:00")),
+                            close_time=None,
+                            open_price=float(trade.get("price", 0)),
+                            close_price=None,
+                            units=float(trade.get("currentUnits", 0)),
+                            realized_pl=unrealized_pl,
+                        )
             
             # Track trades that were open before but are now closed
             newly_closed_ids = previous_open_ids - current_open_trade_ids
@@ -666,8 +717,12 @@ class PaperTradingEngine:
                         trade_id = tx.get("tradeID")
                         
                         # Process TRADE_CLOSE transactions
+                        # Only process trades that belong to this session
                         if tx_type == "TRADE_CLOSE" and trade_id:
                             trade_id_str = str(trade_id)
+                            # Only process if this trade belongs to our session
+                            if trade_id_str not in session.session_trade_ids:
+                                continue
                             if trade_id_str not in existing_closed_ids and trade_id_str not in current_open_trade_ids:
                                 # This is a closed trade we haven't seen before
                                 instrument = tx.get("instrument", session.instrument)

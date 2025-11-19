@@ -1,15 +1,22 @@
 "use client";
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/context/AuthContext";
 import { Dropdown } from "../ui/dropdown/Dropdown";
 import { DropdownItem } from "../ui/dropdown/DropdownItem";
 import { SettingsIcon } from "@/icons";
+import Switch from "../form/switch/Switch";
 
 export default function UserDropdown() {
   const [isOpen, setIsOpen] = useState(false);
+  const [liveTradingEnabled, setLiveTradingEnabled] = useState<boolean | undefined>(undefined);
   const { logout } = useAuth();
   const router = useRouter();
+
+  useEffect(() => {
+    const enabled = localStorage.getItem("liveTradingEnabled") === "true";
+    setLiveTradingEnabled(enabled);
+  }, []);
 
 function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
   e.stopPropagation();
@@ -23,6 +30,14 @@ function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
   const handleLogout = () => {
     logout();
     router.push('/login');
+  };
+
+  const handleLiveTradingToggle = (checked: boolean) => {
+    localStorage.setItem("liveTradingEnabled", String(checked));
+    setLiveTradingEnabled(checked);
+    if (checked) {
+      router.push('/live-trading');
+    }
   };
   return (
     <div className="relative">
@@ -63,28 +78,15 @@ function toggleDropdown(e: React.MouseEvent<HTMLButtonElement, MouseEvent>) {
       >
         <ul className="flex flex-col gap-1 pt-3 pb-3 border-b border-gray-200 dark:border-gray-800">
           <li>
-            <DropdownItem
-              onItemClick={closeDropdown}
-              tag="button"
-              className="flex items-center gap-3 px-3 py-2 font-medium text-gray-700 rounded-lg group text-theme-sm hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-white/5 dark:hover:text-gray-300 w-full text-left"
-            >
-              <svg
-                className="fill-gray-500 group-hover:fill-gray-700 dark:fill-gray-400 dark:group-hover:fill-gray-300"
-                width="24"
-                height="24"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <path
-                  fillRule="evenodd"
-                  clipRule="evenodd"
-                  d="M12 3.5C7.30558 3.5 3.5 7.30558 3.5 12C3.5 16.6944 7.30558 20.5 12 20.5C16.6944 20.5 20.5 16.6944 20.5 12C20.5 7.30558 16.6944 3.5 12 3.5ZM2 12C2 6.47715 6.47715 2 12 2C17.5228 2 22 6.47715 22 12C22 17.5228 17.5228 22 12 22C6.47715 22 2 17.5228 2 12ZM12 7C12.4142 7 12.75 7.33579 12.75 7.75V11.25H16.25C16.6642 11.25 17 11.5858 17 12C17 12.4142 16.6642 12.75 16.25 12.75H12.75V16.25C12.75 16.6642 12.4142 17 12 17C11.5858 17 11.25 16.6642 11.25 16.25V12.75H7.75C7.33579 12.75 7 12.4142 7 12C7 11.5858 7.33579 11.25 7.75 11.25H11.25V7.75C11.25 7.33579 11.5858 7 12 7Z"
-                  fill=""
+            <div className="px-3 py-2">
+              {liveTradingEnabled !== undefined && (
+                <Switch
+                  label="Enable Live Trading"
+                  defaultChecked={liveTradingEnabled}
+                  onChange={handleLiveTradingToggle}
                 />
-              </svg>
-              Edit API keys
-            </DropdownItem>
+              )}
+            </div>
           </li>
           <li>
             <DropdownItem

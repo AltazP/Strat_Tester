@@ -1,10 +1,10 @@
 <svg width="240" height="40" viewBox="0 0 240 40" xmlns="http://www.w3.org/2000/svg">
-  <defs>
+<defs>
     <linearGradient id="gradLight" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#2b6aff"/>
       <stop offset="100%" stop-color="#00d4ff"/>
     </linearGradient>
-  </defs>
+</defs>
   <!-- Arrow -->
   <path d="M10 28 L25 12 L40 28" fill="none" stroke="url(#gradLight)" stroke-width="4" stroke-linecap="round"/>
   <!-- Text -->

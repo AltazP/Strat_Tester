@@ -92,6 +92,7 @@ type Trade = {
   close_price: number | null;
   units: number;
   realized_pl: number;
+  unrealized_pl?: number;
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -340,17 +341,21 @@ function SessionCard({
             </div>
           </div>
           
-          {(closedTrades.length > 0 || openTrades.length > 0) && (
-            <div className="pt-2 border-t border-stroke dark:border-strokedark">
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
-                Trade History ({closedTrades.length + openTrades.length})
-              </p>
+          <div className="pt-2 border-t border-stroke dark:border-strokedark">
+            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+              Trade History ({closedTrades.length + openTrades.length})
+            </p>
+            {closedTrades.length === 0 && openTrades.length === 0 ? (
+              <p className="text-xs text-gray-500 dark:text-gray-400 py-4 text-center">No trades yet</p>
+            ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {[...closedTrades, ...openTrades].slice().reverse().map((trade) => {
                   const isClosed = trade.close_time !== null;
-                  const isPositive = trade.realized_pl >= 0;
+                  const unrealizedPl = trade.unrealized_pl ?? 0;
+                  const isPositive = isClosed ? (trade.realized_pl >= 0) : (unrealizedPl >= 0);
                   const openDate = trade.open_time ? new Date(trade.open_time) : null;
                   const closeDate = trade.close_time ? new Date(trade.close_time) : null;
+                  const pnl = isClosed ? trade.realized_pl : unrealizedPl;
                   
                   return (
                     <div key={trade.id} className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-gray-800 border border-stroke dark:border-strokedark">
@@ -375,20 +380,19 @@ function SessionCard({
                         )}
                       </div>
                       <div className="text-right">
-                        {isClosed ? (
-                          <p className={`text-sm font-semibold ${isPositive ? 'text-success-500 dark:text-success-400' : 'text-error-500 dark:text-error-400'}`}>
-                            {isPositive ? '+' : ''}{trade.realized_pl.toFixed(2)}
-                          </p>
-                        ) : (
-                          <p className="text-sm font-semibold text-gray-500 dark:text-gray-400">Open</p>
+                        <p className={`text-sm font-semibold ${isPositive ? 'text-success-500 dark:text-success-400' : 'text-error-500 dark:text-error-400'}`}>
+                          {isPositive ? '+' : ''}{pnl.toFixed(2)}
+                        </p>
+                        {!isClosed && (
+                          <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Unrealized</p>
                         )}
                       </div>
                     </div>
                   );
                 })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>

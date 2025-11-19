@@ -92,6 +92,7 @@ type Trade = {
   close_price: number | null;
   units: number;
   realized_pl: number;
+  unrealized_pl?: number;
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -340,17 +341,21 @@ function SessionCard({
             </div>
           </div>
           
-          {(closedTrades.length > 0 || openTrades.length > 0) && (
-            <div className="pt-2 border-t border-stroke dark:border-strokedark">
-              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
-                Trade History ({closedTrades.length + openTrades.length})
-              </p>
+          <div className="pt-2 border-t border-stroke dark:border-strokedark">
+            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+              Trade History ({closedTrades.length + openTrades.length})
+            </p>
+            {closedTrades.length === 0 && openTrades.length === 0 ? (
+              <p className="text-xs text-gray-500 dark:text-gray-400 py-4 text-center">No trades yet</p>
+            ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {[...closedTrades, ...openTrades].slice().reverse().map((trade) => {
                   const isClosed = trade.close_time !== null;
-                  const isPositive = trade.realized_pl >= 0;
+                  const unrealizedPl = trade.unrealized_pl ?? 0;
+                  const isPositive = isClosed ? (trade.realized_pl >= 0) : (unrealizedPl >= 0);
                   const openDate = trade.open_time ? new Date(trade.open_time) : null;
                   const closeDate = trade.close_time ? new Date(trade.close_time) : null;
+                  const pnl = isClosed ? trade.realized_pl : unrealizedPl;
                   
                   return (
                     <div key={trade.id} className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-gray-800 border border-stroke dark:border-strokedark">
@@ -375,20 +380,19 @@ function SessionCard({
                         )}
                       </div>
                       <div className="text-right">
-                        {isClosed ? (
-                          <p className={`text-sm font-semibold ${isPositive ? 'text-success-500 dark:text-success-400' : 'text-error-500 dark:text-error-400'}`}>
-                            {isPositive ? '+' : ''}{trade.realized_pl.toFixed(2)}
-                          </p>
-                        ) : (
-                          <p className="text-sm font-semibold text-gray-500 dark:text-gray-400">Open</p>
+                        <p className={`text-sm font-semibold ${isPositive ? 'text-success-500 dark:text-success-400' : 'text-error-500 dark:text-error-400'}`}>
+                          {isPositive ? '+' : ''}{pnl.toFixed(2)}
+                        </p>
+                        {!isClosed && (
+                          <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Unrealized</p>
                         )}
                       </div>
                     </div>
                   );
                 })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -920,42 +924,124 @@ function AccountManagementModal({
 }
 
 export default function LiveTradingPage() {
-  return (
-    <div className="flex items-center justify-center min-h-[600px]">
-      <div className="text-center max-w-md mx-auto p-8">
-        <div className="mb-6">
-          <svg
-            className="mx-auto h-16 w-16 text-gray-400 dark:text-gray-500"
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-            />
-          </svg>
+  const [liveTradingEnabled, setLiveTradingEnabled] = useState(false);
+  const [isConfigured, setIsConfigured] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const enabled = localStorage.getItem("liveTradingEnabled") === "true";
+    setLiveTradingEnabled(enabled);
+
+    if (enabled) {
+      fetch(`${BE}/live-trading/status`)
+        .then(res => res.json())
+        .then(data => {
+          setIsConfigured(data.configured || false);
+          setLoading(false);
+        })
+        .catch(() => {
+          setIsConfigured(false);
+          setLoading(false);
+        });
+    } else {
+      setLoading(false);
+    }
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-[600px]">
+        <div className="text-center">
+          <p className="text-gray-500 dark:text-gray-400">Loading...</p>
         </div>
-        <h2 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-3">
-          Live Trading Currently Disabled
-        </h2>
-        <p className="text-gray-600 dark:text-gray-400 mb-6">
-          Live trading functionality is currently disabled. Please use Paper Trading for testing your strategies.
-        </p>
-        <Button
-          variant="primary"
-          onClick={() => window.location.href = '/paper-trading'}
-        >
-          Go to Paper Trading
-        </Button>
       </div>
-    </div>
-  );
+    );
+  }
+
+  if (!liveTradingEnabled) {
+    return (
+      <div className="flex items-center justify-center min-h-[600px]">
+        <div className="text-center max-w-md mx-auto p-8">
+          <div className="mb-6">
+            <svg
+              className="mx-auto h-16 w-16 text-gray-400 dark:text-gray-500"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-3">
+            Live Trading Currently Disabled
+          </h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-6">
+            Enable Live Trading in Settings to access this page.
+          </p>
+          <Button
+            variant="primary"
+            onClick={() => window.location.href = '/paper-trading'}
+          >
+            Go to Paper Trading
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isConfigured) {
+    return (
+      <div className="flex items-center justify-center min-h-[600px]">
+        <div className="text-center max-w-md mx-auto p-8">
+          <div className="mb-6">
+            <svg
+              className="mx-auto h-16 w-16 text-warning"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
+            </svg>
+          </div>
+          <h2 className="text-2xl font-bold text-gray-800 dark:text-white/90 mb-3">
+            Live Trading API Key Not Configured
+          </h2>
+          <p className="text-gray-600 dark:text-gray-400 mb-4">
+            To use Live Trading, you need to configure your OANDA Live API key in the backend.
+          </p>
+          <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 mb-6 text-left">
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Add to your backend/.env file:
+            </p>
+            <code className="text-xs text-gray-600 dark:text-gray-400 block">
+              OANDA_LIVE_API_KEY=your_live_api_key_here<br />
+              OANDA_LIVE_HOST=https://api-fxtrade.oanda.com<br />
+            </code>
+          </div>
+          <Button
+            variant="primary"
+            onClick={() => window.location.href = '/paper-trading'}
+          >
+            Go to Paper Trading
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return <LiveTradingPageOld />;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function LiveTradingPageOld() {
   const [accounts, setAccounts] = useState<AccountInfo[]>([]);
   const [sessions, setSessions] = useState<PaperSession[]>([]);

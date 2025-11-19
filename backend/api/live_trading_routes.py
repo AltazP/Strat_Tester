@@ -77,6 +77,16 @@ class AccountInfo(BaseModel):
 
 # ==================== ROUTES ====================
 
+@router.get("/status")
+async def get_live_trading_status():
+    """Check if live trading is configured."""
+    import os
+    has_api_key = bool(os.getenv("OANDA_LIVE_API_KEY"))
+    return {
+        "configured": has_api_key,
+        "has_api_key": has_api_key
+    }
+
 @router.get("/accounts", response_model=List[AccountInfo])
 async def list_accounts():
     """List all available OANDA live accounts."""
