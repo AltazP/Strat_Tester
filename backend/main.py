@@ -36,6 +36,7 @@ async def startup_event():
     """Run recovery logic on startup to handle orphaned positions."""
     try:
         import os
+        import asyncio
         from core.paper_trading import get_engine
         
         # Only attempt recovery if OANDA credentials are properly configured
@@ -45,10 +46,16 @@ async def startup_event():
             
         engine = get_engine()
         
-        # Check for orphaned positions (positions on OANDA but not tracked in sessions)
+        # Check for orphaned positions with timeout to prevent startup hangs
         # Set auto_close=False to just log warnings, or True to auto-close on startup
-        # You can change this based on your preference
-        await engine.recover_orphaned_positions(auto_close=False)
-        logger.info("Startup recovery check completed")
+        try:
+            await asyncio.wait_for(
+                engine.recover_orphaned_positions(auto_close=False),
+                timeout=10.0  # 10 second timeout
+            )
+            logger.info("Startup recovery check completed")
+        except asyncio.TimeoutError:
+            logger.warning("Position recovery timed out - continuing startup anyway")
     except Exception as e:
         logger.error(f"Error during startup recovery: {e}", exc_info=True)
+        # Don't re-raise - allow startup to continue even if recovery fails
