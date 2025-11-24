@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from api.routes import router as api_router
 from util.logging import setup_logging
 import logging
+from datetime import datetime, timezone
 
 # Load .env BEFORE anything uses os.getenv(...)
 load_dotenv()
@@ -23,10 +24,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# optional health check for quick header tests
+# Health check endpoint for monitoring/load balancers
 @app.get("/ping")
 def ping():
     return {"ok": True}
+
+@app.get("/health")
+async def health_check():
+    """Comprehensive health check endpoint."""
+    try:
+        from core.paper_trading import get_engine
+        
+        # Check if engine is responsive
+        engine = get_engine()
+        session_count = len(engine.sessions)
+        running_sessions = sum(1 for s in engine.sessions.values() if s.status.value == "running")
+        
+        # Try to get memory info if psutil is available
+        memory_mb = None
+        memory_ok = True
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / 1024 / 1024
+            memory_ok = memory_mb < 512
+        except ImportError:
+            # psutil not installed, skip memory check
+            pass
+        except Exception:
+            # Memory check failed, but don't fail health check
+            pass
+        
+        return {
+            "status": "healthy" if memory_ok else "degraded",
+            "memory_mb": round(memory_mb, 2) if memory_mb is not None else None,
+            "memory_ok": memory_ok,
+            "sessions": {
+                "total": session_count,
+                "running": running_sessions
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}", exc_info=True)
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }, 503
 
 # mount your API
 app.include_router(api_router)

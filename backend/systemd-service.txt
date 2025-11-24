@@ -1,0 +1,32 @@
+# Systemd service file for Strategy Tester Backend
+# Save this as: /etc/systemd/system/strategy-tester.service
+# Then run: sudo systemctl daemon-reload && sudo systemctl enable strategy-tester
+
+[Unit]
+Description=Strategy Tester Backend API
+After=network.target
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/path/to/Strat_Tester/backend
+Environment="PATH=/path/to/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="LOG_LEVEL=INFO"
+Environment="LOG_FILE=/var/log/strategy-tester/app.log"
+ExecStart=/path/to/venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits to prevent runaway processes
+MemoryMax=1G
+MemoryHigh=768M
+
+# Auto-restart on failure
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
+
