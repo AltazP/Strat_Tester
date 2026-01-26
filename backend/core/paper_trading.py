@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field, asdict
 from enum import Enum
@@ -16,6 +17,78 @@ from services.oanda_trading import OandaTradingClient
 from services.oanda import fetch_candles
 
 logger = logging.getLogger(__name__)
+
+def parse_iso_datetime(iso_str: str) -> datetime:
+    """
+    Parse ISO datetime string, handling nanoseconds by truncating to microseconds.
+    Python's fromisoformat() only supports up to microseconds (6 digits), but OANDA
+    sometimes returns nanoseconds (9 digits).
+    
+    This function is crash-safe and will never raise unhandled exceptions that could
+    crash the server. All errors are caught and re-raised as ValueError with context.
+    
+    Args:
+        iso_str: ISO format datetime string, e.g., "2025-12-08T19:00:01.105556610+00:00"
+    
+    Returns:
+        datetime object with timezone info
+    
+    Raises:
+        ValueError: If the string cannot be parsed (never crashes the server)
+    """
+    try:
+        if not iso_str or not isinstance(iso_str, str):
+            raise ValueError(f"Invalid datetime string: {iso_str}")
+        
+        # Replace Z with +00:00 for timezone
+        iso_str = iso_str.replace("Z", "+00:00")
+        
+        # Handle nanoseconds: truncate to microseconds (6 digits max)
+        # Split on the decimal point to separate date/time from fractional seconds
+        if "." in iso_str:
+            parts = iso_str.split(".", 1)
+            if len(parts) == 2:
+                date_part = parts[0]
+                fractional_and_tz = parts[1]
+                
+                # Extract timezone and fractional seconds
+                # Look for timezone indicators: +HH:MM or -HH:MM
+                tz = ""
+                fractional = fractional_and_tz
+                
+                # Check for positive timezone offset (+HH:MM)
+                if "+" in fractional_and_tz:
+                    idx = fractional_and_tz.index("+")
+                    fractional = fractional_and_tz[:idx]
+                    tz = fractional_and_tz[idx:]
+                # Check for negative timezone offset (-HH:MM)
+                # We need to be careful: the fractional part might have a minus sign
+                # Look for the pattern where we have digits, then -HH:MM
+                elif re.search(r'-\d{2}:\d{2}$', fractional_and_tz):
+                    # Pattern: digits followed by -HH:MM at the end
+                    match = re.search(r'(.+?)(-\d{2}:\d{2})$', fractional_and_tz)
+                    if match:
+                        fractional = match.group(1)
+                        tz = match.group(2)
+                
+                # Truncate nanoseconds to microseconds (max 6 digits)
+                if len(fractional) > 6:
+                    fractional = fractional[:6]
+                
+                # Reconstruct the string
+                if tz:
+                    iso_str = f"{date_part}.{fractional}{tz}"
+                else:
+                    iso_str = f"{date_part}.{fractional}"
+        
+        return datetime.fromisoformat(iso_str)
+    except ValueError:
+        # Re-raise ValueError as-is (it's already a good error message)
+        raise
+    except Exception as e:
+        # Catch any unexpected errors and convert to ValueError to prevent crashes
+        logger.error(f"Unexpected error parsing datetime '{iso_str}': {e}", exc_info=True)
+        raise ValueError(f"Failed to parse datetime string '{iso_str}': {str(e)}")
 
 class TradingStatus(str, Enum):
     STOPPED = "stopped"
@@ -156,11 +229,12 @@ class PaperTradingEngine:
     MIN_BAR_POLL_SECONDS = 5
     MAX_BAR_POLL_SECONDS = 20
     PAUSE_SLEEP_SECONDS = 5
-    IDLE_SLEEP_SECONDS = 1
-    MAX_CLOSED_TRADES = 200
-    TRANSACTION_PAGE_SIZE = 200
-    TRANSACTION_REFRESH_SECONDS = 60.0
-    MAX_CONCURRENT_SESSIONS = 10  # Prevent resource exhaustion
+    IDLE_SLEEP_SECONDS = 2
+    MAX_CLOSED_TRADES = 100
+    TRANSACTION_PAGE_SIZE = 50  # Reduced from 100 to prevent memory spikes
+    TRANSACTION_REFRESH_SECONDS = 120.0  # Increased from 60s to 120s to reduce API load
+    MAX_CONCURRENT_SESSIONS = 5
+    SESSION_CLEANUP_THRESHOLD = 50
     
     def __init__(self):
         self.sessions: Dict[str, PaperTradingSession] = {}
@@ -181,6 +255,9 @@ class PaperTradingEngine:
         """Create a new paper trading session."""
         if session_id in self.sessions:
             raise ValueError(f"Session {session_id} already exists")
+        
+        if len(self.sessions) >= self.SESSION_CLEANUP_THRESHOLD:
+            self._cleanup_old_sessions()
         
         # Safety check: limit concurrent sessions to prevent resource exhaustion
         running_sessions = sum(1 for s in self.sessions.values() if s.status == TradingStatus.RUNNING)
@@ -205,7 +282,7 @@ class PaperTradingEngine:
         # Don't create client here - let routes create it with appropriate settings (live vs paper)
         # Client will be created in start_session if needed
         
-        logger.info(f"Created paper trading session {session_id}")
+        logger.warning(f"Created paper trading session {session_id}")
         return session
     
     async def start_session(self, session_id: str, strategy_class: type[Strategy]):
@@ -229,7 +306,7 @@ class PaperTradingEngine:
         
         # Ensure client exists
         if session_id not in self.clients:
-            logger.error(f"Client not found for session {session_id}, creating new client")
+            logger.warning(f"Client not found for session {session_id}, creating new client")
             try:
                 self.clients[session_id] = OandaTradingClient(account_id=session.account_id)
             except Exception as e:
@@ -264,7 +341,7 @@ class PaperTradingEngine:
             raise ValueError(f"Failed to start trading loop: {str(e)}") from e
         
         session.status = TradingStatus.RUNNING
-        logger.info(f"Started paper trading session {session_id}")
+        logger.warning(f"Started paper trading session {session_id}")
     
     async def stop_session(self, session_id: str):
         """Stop a paper trading session."""
@@ -321,7 +398,6 @@ class PaperTradingEngine:
                                             units=-close_units,
                                             account_id=session.account_id
                                         )
-                                        logger.info(f"Closed {close_units:.0f} units (session's long position) for {session_id}")
                                 elif net_units < 0:
                                     # Account has short (other session) - we can't close our long
                                     # This means our position was already closed or reversed
@@ -337,7 +413,6 @@ class PaperTradingEngine:
                                             units=abs(close_units),
                                             account_id=session.account_id
                                         )
-                                        logger.info(f"Closed {abs(close_units):.0f} units (session's short position) for {session_id}")
                                 elif net_units > 0:
                                     # Account has long (other session) - we can't close our short
                                     logger.warning(f"Cannot close {abs(session.session_position_units):.0f} short units - account has {net_units:.0f} long (likely from other session)")
@@ -358,7 +433,7 @@ class PaperTradingEngine:
                 logger.error(f"Error closing positions: {e}")
         
         session.status = TradingStatus.STOPPED
-        logger.info(f"Stopped paper trading session {session_id}")
+        logger.warning(f"Stopped paper trading session {session_id}")
     
     async def pause_session(self, session_id: str):
         """Pause a paper trading session (keep positions, stop new trades)."""
@@ -368,7 +443,7 @@ class PaperTradingEngine:
         session = self.sessions[session_id]
         if session.status == TradingStatus.RUNNING:
             session.status = TradingStatus.PAUSED
-            logger.info(f"Paused paper trading session {session_id}")
+            logger.warning(f"Paused paper trading session {session_id}")
     
     async def resume_session(self, session_id: str):
         """Resume a paused paper trading session."""
@@ -382,7 +457,7 @@ class PaperTradingEngine:
             session.next_metrics_update = now
             session.next_bar_poll = now
             session.next_transaction_sync = now
-            logger.info(f"Resumed paper trading session {session_id}")
+            logger.warning(f"Resumed paper trading session {session_id}")
     
     def get_session(self, session_id: str) -> Optional[PaperTradingSession]:
         """Get a paper trading session."""
@@ -407,7 +482,7 @@ class PaperTradingEngine:
                 except Exception as e:
                     logger.warning(f"Failed to close OANDA client for session {session_id}: {e}")
             
-            logger.info(f"Deleted paper trading session {session_id}")
+            logger.warning(f"Deleted paper trading session {session_id}")
     
     async def _trading_loop(self, session_id: str, strategy_class: type[Strategy]):
         """Main trading loop for a session."""
@@ -416,7 +491,6 @@ class PaperTradingEngine:
         
         # Initialize strategy
         try:
-            logger.info(f"Initializing strategy {strategy_class.__name__} with params: {session.strategy_params}")
             strategy = strategy_class(session.strategy_params)
             ctx = BacktestContext(session.strategy_params)
             
@@ -434,7 +508,6 @@ class PaperTradingEngine:
                 # Other sessions exist - only sync with positions we opened
                 # Start from 0 and let strategy manage its own position independently
                 ctx.position = session.session_position_units / session.max_position_size if session.max_position_size > 0 else 0.0
-                logger.info(f"Other sessions active for {session.instrument} on account {session.account_id}. Starting {session_id} with session_position={session.session_position_units:.0f} units (ctx.position={ctx.position:.4f})")
             else:
                 # No other sessions - safe to sync with all positions on OANDA
                 try:
@@ -448,26 +521,24 @@ class PaperTradingEngine:
                             if abs(net_units) > 0:
                                 ctx.position = net_units / session.max_position_size
                                 session.session_position_units = net_units
-                                logger.info(f"Synced existing position for {session_id}: {net_units} units (ctx.position={ctx.position:.4f})")
                                 break
                 except Exception as e:
                     logger.warning(f"Failed to sync existing positions for {session_id}: {e}")
             
             strategy.on_start(ctx)
-            logger.info(f"Strategy initialized successfully for session {session_id}")
         except Exception as e:
             logger.error(f"Failed to initialize strategy: {e}", exc_info=True)
             session.status = TradingStatus.ERROR
             session.error_message = f"Strategy initialization failed: {str(e)}"
             return
         
-        # Get historical data for warmup
+        # Get historical data for warmup (reduced from 100 to 50 bars to reduce API load)
         # Note: We preserve ctx.position during warmup so strategy sees the synced position
         try:
             bars = await fetch_candles(
                 instrument=session.instrument,
                 granularity=session.granularity,
-                count=100
+                count=50
             )
             
             # Run strategy on historical data for warmup
@@ -554,8 +625,6 @@ class PaperTradingEngine:
                         new_position = ctx.position
                         
                         if old_position != new_position:
-                            if abs(new_position - old_position) > 0.01:
-                                logger.info(f"Position change for {session_id}: {old_position:.2f} → {new_position:.2f}")
                             # Get current price for execution
                             pricing = await client.get_pricing(
                                 [session.instrument],
@@ -576,7 +645,7 @@ class PaperTradingEngine:
                         session.last_update = datetime.now(timezone.utc)
                         
                     except Exception as e:
-                        logger.error(f"Error fetching/processing candle: {e}")
+                        logger.error(f"Error fetching/processing candle for {session_id}: {e}", exc_info=True)
                         session.next_bar_poll = time.monotonic() + self.MIN_BAR_POLL_SECONDS
                         await asyncio.sleep(self.MIN_BAR_POLL_SECONDS)
                         continue
@@ -584,14 +653,21 @@ class PaperTradingEngine:
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    logger.error(f"Error in trading loop for {session_id}: {e}")
+                    logger.error(f"Error in trading loop for {session_id}: {e}", exc_info=True)
                     session.error_message = str(e)
                     await asyncio.sleep(self.MIN_BAR_POLL_SECONDS)
                     
         except asyncio.CancelledError:
-            logger.info(f"Trading loop cancelled for {session_id}")
+            logger.warning(f"Trading loop cancelled for session {session_id}")
+        except Exception as e:
+            logger.error(f"Fatal error in trading loop for {session_id}: {e}", exc_info=True)
+            session.status = TradingStatus.ERROR
+            session.error_message = f"Fatal error: {str(e)}"
         finally:
-            strategy.on_stop(ctx)
+            try:
+                strategy.on_stop(ctx)
+            except Exception as e:
+                logger.error(f"Error in strategy.on_stop for {session_id}: {e}", exc_info=True)
     
     async def _execute_position_change(
         self,
@@ -650,9 +726,6 @@ class PaperTradingEngine:
             # Track the position change for this session
             session.session_position_units += position_delta
             
-            if abs(position_delta) > 100:
-                logger.info(f"Executed order for {session_id}: {position_delta:.0f} units at ~{current_price:.5f} (session total: {session.session_position_units:.0f})")
-            
         except Exception as e:
             logger.error(f"Failed to execute order for {session_id}: {e}")
             session.error_message = f"Order execution failed: {e}"
@@ -663,6 +736,14 @@ class PaperTradingEngine:
         client = self.clients[session_id]
         now_monotonic = time.monotonic()
         
+        # Prevent concurrent metric updates for the same session
+        if not hasattr(session, '_updating_metrics'):
+            session._updating_metrics = False
+        
+        if session._updating_metrics:
+            return
+        
+        session._updating_metrics = True
         try:
             # Get account summary
             account = await client.get_account_summary(session.account_id)
@@ -715,15 +796,15 @@ class PaperTradingEngine:
                     # Filter by: 1) trade ID is in our session_trade_ids, OR
                     #            2) instrument matches AND trade was opened after session started
                     belongs_to_session = False
+                    open_time_str = trade.get("openTime", "")
                     
                     if trade_id_str in session.session_trade_ids:
                         belongs_to_session = True
                     elif instrument == session.instrument and session.start_time:
                         # Check if trade was opened after session started
-                        open_time_str = trade.get("openTime", "")
                         if open_time_str:
                             try:
-                                trade_open_time = datetime.fromisoformat(open_time_str.replace("Z", "+00:00"))
+                                trade_open_time = parse_iso_datetime(open_time_str)
                                 if trade_open_time >= session.start_time:
                                     belongs_to_session = True
                                     # Add to session_trade_ids for future tracking
@@ -737,7 +818,7 @@ class PaperTradingEngine:
                         session.open_trades[trade_id_str] = Trade(
                             id=trade_id_str,
                             instrument=instrument,
-                            open_time=datetime.fromisoformat(open_time_str.replace("Z", "+00:00")),
+                            open_time=parse_iso_datetime(open_time_str),
                             close_time=None,
                             open_price=float(trade.get("price", 0)),
                             close_price=None,
@@ -749,8 +830,9 @@ class PaperTradingEngine:
             newly_closed_ids = previous_open_ids - current_open_trade_ids
             
             # Fetch closed trades less frequently unless we detect new closures
+            # Skip if no session trade IDs tracked (no trades placed) to reduce unnecessary API calls
             should_fetch_transactions = False
-            if session.start_time:
+            if session.start_time and len(session.session_trade_ids) > 0:
                 if newly_closed_ids:
                     should_fetch_transactions = True
                 elif now_monotonic >= session.next_transaction_sync:
@@ -759,81 +841,99 @@ class PaperTradingEngine:
             if should_fetch_transactions:
                 try:
                     from_time = session.last_transaction_time or session.start_time.isoformat()
+                    
+                    # Limit transaction fetching to last 24 hours to prevent excessive data
+                    max_lookback = datetime.now(timezone.utc) - timedelta(hours=24)
+                    if session.start_time and session.start_time < max_lookback:
+                        from_time = max_lookback.isoformat()
+                    
                     transactions = await client.get_transactions(
                         session.account_id,
                         from_time=from_time,
                         page_size=self.TRANSACTION_PAGE_SIZE
                     )
-                    if transactions:
+                    
+                    if not transactions:
+                        session.next_transaction_sync = now_monotonic + self.TRANSACTION_REFRESH_SECONDS
+                    else:
                         session.last_transaction_time = transactions[-1].get("time", session.last_transaction_time)
-                    
-                    existing_closed_ids = {t.id for t in session.closed_trades}
-                    
-                    for tx in transactions:
-                        tx_type = tx.get("type")
-                        trade_id = tx.get("tradeID")
                         
-                        if tx_type == "TRADE_CLOSE" and trade_id:
-                            trade_id_str = str(trade_id)
-                            if trade_id_str not in session.session_trade_ids:
-                                continue
-                            if trade_id_str in existing_closed_ids or trade_id_str in current_open_trade_ids:
-                                continue
+                        existing_closed_ids = {t.id for t in session.closed_trades}
+                        
+                        # Build lookup dict for ORDER_FILL transactions (O(n) instead of O(n²))
+                        order_fills_by_trade_id: Dict[str, Dict[str, Any]] = {}
+                        for tx in transactions:
+                            if tx.get("type") == "ORDER_FILL":
+                                trade_id = tx.get("tradeID")
+                                if trade_id:
+                                    trade_id_str = str(trade_id)
+                                    # Keep the most recent ORDER_FILL for each trade
+                                    if trade_id_str not in order_fills_by_trade_id:
+                                        order_fills_by_trade_id[trade_id_str] = tx
+                        
+                        # Process TRADE_CLOSE transactions using lookup dict
+                        for tx in transactions:
+                            tx_type = tx.get("type")
+                            trade_id = tx.get("tradeID")
                             
-                            instrument = tx.get("instrument", session.instrument)
-                            pl = float(tx.get("pl", 0))
-                            close_price = float(tx.get("price", 0))
-                            close_time_str = tx.get("time", "")
-                            
-                            open_price = close_price
-                            units = 0.0
-                            open_time_str = close_time_str
-                            
-                            for open_tx in transactions:
-                                if (
-                                    open_tx.get("tradeID") == trade_id
-                                    and open_tx.get("type") == "ORDER_FILL"
-                                    and open_tx.get("id") != tx.get("id")
-                                ):
-                                    open_price = float(open_tx.get("price", open_price))
-                                    units = float(open_tx.get("units", units))
-                                    open_time_str = open_tx.get("time", open_time_str)
-                                    break
-                            
-                            if units == 0.0 and trade_id_str in previous_open_ids:
-                                prev_trade = previous_open_trades.get(trade_id_str)
-                                if prev_trade:
-                                    open_price = prev_trade.open_price
-                                    units = prev_trade.units
-                                    open_time_str = prev_trade.open_time.isoformat()
-                            
-                            try:
-                                open_time = datetime.fromisoformat(open_time_str.replace("Z", "+00:00"))
-                                close_time = datetime.fromisoformat(close_time_str.replace("Z", "+00:00"))
+                            if tx_type == "TRADE_CLOSE" and trade_id:
+                                trade_id_str = str(trade_id)
+                                if trade_id_str not in session.session_trade_ids:
+                                    continue
+                                if trade_id_str in existing_closed_ids or trade_id_str in current_open_trade_ids:
+                                    continue
                                 
-                                closed_trade = Trade(
-                                    id=trade_id_str,
-                                    instrument=instrument,
-                                    open_time=open_time,
-                                    close_time=close_time,
-                                    open_price=open_price,
-                                    close_price=close_price,
-                                    units=units if units != 0.0 else float(tx.get("units", 0)),
-                                    realized_pl=pl,
-                                )
-                                session.closed_trades.append(closed_trade)
-                                if len(session.closed_trades) > self.MAX_CLOSED_TRADES:
-                                    session.closed_trades = session.closed_trades[-self.MAX_CLOSED_TRADES:]
+                                instrument = tx.get("instrument", session.instrument)
+                                pl = float(tx.get("pl", 0))
+                                close_price = float(tx.get("price", 0))
+                                close_time_str = tx.get("time", "")
                                 
-                                if pl > 0:
-                                    session.winning_trades += 1
-                                elif pl < 0:
-                                    session.losing_trades += 1
-                            except (ValueError, KeyError) as e:
-                                logger.warning(f"Failed to parse trade close transaction: {e}")
+                                # Use lookup dict instead of nested loop
+                                open_tx = order_fills_by_trade_id.get(trade_id_str)
+                                if open_tx:
+                                    open_price = float(open_tx.get("price", close_price))
+                                    units = float(open_tx.get("units", 0))
+                                    open_time_str = open_tx.get("time", close_time_str)
+                                else:
+                                    open_price = close_price
+                                    units = 0.0
+                                    open_time_str = close_time_str
+                                
+                                if units == 0.0 and trade_id_str in previous_open_ids:
+                                    prev_trade = previous_open_trades.get(trade_id_str)
+                                    if prev_trade:
+                                        open_price = prev_trade.open_price
+                                        units = prev_trade.units
+                                        open_time_str = prev_trade.open_time.isoformat()
+                                
+                                try:
+                                    open_time = parse_iso_datetime(open_time_str)
+                                    close_time = parse_iso_datetime(close_time_str)
+                                    
+                                    closed_trade = Trade(
+                                        id=trade_id_str,
+                                        instrument=instrument,
+                                        open_time=open_time,
+                                        close_time=close_time,
+                                        open_price=open_price,
+                                        close_price=close_price,
+                                        units=units if units != 0.0 else float(tx.get("units", 0)),
+                                        realized_pl=pl,
+                                    )
+                                    session.closed_trades.append(closed_trade)
+                                    if len(session.closed_trades) > self.MAX_CLOSED_TRADES:
+                                        session.closed_trades = session.closed_trades[-self.MAX_CLOSED_TRADES:]
+                                    
+                                    if pl > 0:
+                                        session.winning_trades += 1
+                                    elif pl < 0:
+                                        session.losing_trades += 1
+                                except (ValueError, KeyError) as e:
+                                    logger.warning(f"Failed to parse trade close transaction for {session_id}: {e}", exc_info=True)
+                        
+                        session.next_transaction_sync = now_monotonic + self.TRANSACTION_REFRESH_SECONDS
                 except Exception as e:
-                    logger.warning(f"Failed to fetch closed trades: {e}")
-                finally:
+                    logger.warning(f"Failed to fetch closed trades for {session_id}: {e}", exc_info=True)
                     session.next_transaction_sync = now_monotonic + self.TRANSACTION_REFRESH_SECONDS
             
             # Recalculate winning/losing trades from closed_trades if they don't match
@@ -842,8 +942,6 @@ class PaperTradingEngine:
             actual_losing = sum(1 for t in session.closed_trades if t.realized_pl < 0)
             
             if len(session.closed_trades) > 0:
-                if session.winning_trades != actual_winning or session.losing_trades != actual_losing:
-                    logger.debug(f"Recalculated win/loss stats for {session_id}: {actual_winning}W / {actual_losing}L")
                     session.winning_trades = actual_winning
                     session.losing_trades = actual_losing
             
@@ -862,17 +960,11 @@ class PaperTradingEngine:
                     f"Trades may have closed before tracking started or transaction fetching failed."
                 )
             
-            # Log trade summary for debugging
-            if len(session.closed_trades) > 0 or len(session.open_trades) > 0:
-                logger.debug(
-                    f"Session {session_id} trade summary: "
-                    f"{len(session.closed_trades)} closed, {len(session.open_trades)} open, "
-                    f"{session.winning_trades}W/{session.losing_trades}L, "
-                    f"Realized P&L: {session.realized_pl:.2f}"
-                )
-            
         except Exception as e:
-            logger.error(f"Failed to update metrics for {session_id}: {e}")
+            logger.error(f"Failed to update metrics for {session_id}: {e}", exc_info=True)
+            session.error_message = f"Metrics update failed: {str(e)}"
+        finally:
+            session._updating_metrics = False
 
     async def recover_orphaned_positions(self, auto_close: bool = False):
         """
@@ -883,7 +975,6 @@ class PaperTradingEngine:
             auto_close: If True, automatically close orphaned positions. 
                        If False, just log a warning.
         """
-        logger.info("Checking for orphaned positions on startup...")
         
         try:
             # Try to get account from environment first
@@ -891,7 +982,6 @@ class PaperTradingEngine:
             
             # If not set, try to discover accounts
             if not account_id:
-                logger.info("OANDA_ACCOUNT_ID not set, attempting to discover accounts...")
                 try:
                     # Create temporary client to list accounts
                     temp_client = OandaTradingClient(account_id="")
@@ -907,7 +997,6 @@ class PaperTradingEngine:
                     if not account_id:
                         logger.warning("Could not determine account ID, skipping position recovery")
                         return
-                    logger.info(f"Using account {account_id} for position recovery")
                 except Exception as e:
                     logger.warning(f"Failed to discover accounts: {e}, skipping position recovery")
                     return
@@ -918,7 +1007,6 @@ class PaperTradingEngine:
                 positions = await client.get_positions(account_id)
                 
                 if not positions:
-                    logger.info(f"No open positions found on OANDA account {account_id}")
                     return
             
                 # Check which positions are tracked in active sessions
@@ -949,7 +1037,7 @@ class PaperTradingEngine:
                     if auto_close:
                         try:
                             await client.close_position(instrument, account_id)
-                            logger.info(f"Closed orphaned position: {instrument}")
+                            logger.warning(f"Closed orphaned position: {instrument}")
                         except Exception as e:
                             logger.error(f"Failed to close position {instrument}: {e}")
                     else:
@@ -960,7 +1048,7 @@ class PaperTradingEngine:
                         )
                 
                 if orphaned_count == 0:
-                    logger.info("All open positions are tracked in active sessions")
+                    pass
                 else:
                     logger.warning(
                         f"Found {orphaned_count} orphaned position(s). "
@@ -974,6 +1062,39 @@ class PaperTradingEngine:
                     
         except Exception as e:
             logger.error(f"Error during position recovery: {e}", exc_info=True)
+    
+    def _cleanup_old_sessions(self):
+        """Clean up old stopped sessions to free memory."""
+        # Find stopped sessions that are not running
+        stopped_sessions = [
+            sid for sid, s in self.sessions.items()
+            if s.status in [TradingStatus.STOPPED, TradingStatus.ERROR]
+        ]
+        
+        # Keep only the 20 most recent stopped sessions
+        if len(stopped_sessions) > 20:
+            # Sort by last_update or start_time to keep most recent
+            sorted_stopped = sorted(
+                stopped_sessions,
+                key=lambda sid: self.sessions[sid].last_update or self.sessions[sid].start_time or datetime.min.replace(tzinfo=timezone.utc),
+                reverse=True
+            )
+            
+            # Delete old sessions (keep 20, delete the rest)
+            for session_id in sorted_stopped[20:]:
+                try:
+                    # Clean up client if exists
+                    if session_id in self.clients:
+                        client = self.clients.pop(session_id)
+                        try:
+                            # Note: Can't use await in sync method, client will be cleaned up in delete_session
+                            pass
+                        except Exception:
+                            pass
+                    del self.sessions[session_id]
+                    logger.warning(f"Auto-cleaned up old session {session_id} to free memory")
+                except Exception as e:
+                    logger.error(f"Failed to cleanup session {session_id}: {e}")
 
 # Global engine instance
 _engine: Optional[PaperTradingEngine] = None

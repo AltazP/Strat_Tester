@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from api.routes import router as api_router
 from util.logging import setup_logging
 import logging
+import sys
+import traceback
 from datetime import datetime, timezone
 
 # Load .env BEFORE anything uses os.getenv(...)
@@ -12,6 +14,20 @@ load_dotenv()
 
 setup_logging()
 logger = logging.getLogger(__name__)
+
+# Global exception handler to prevent crashes
+def handle_exception(exc_type, exc_value, exc_traceback):
+    """Handle unhandled exceptions globally to prevent crashes."""
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    
+    logger.critical(
+        "Unhandled exception",
+        exc_info=(exc_type, exc_value, exc_traceback)
+    )
+
+sys.excepthook = handle_exception
 
 app = FastAPI(title="Strategy Lab API")
 
@@ -23,6 +39,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Exception handler middleware to catch all unhandled exceptions
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    """Catch all unhandled exceptions to prevent server crashes."""
+    logger.error(f"Unhandled exception in request {request.method} {request.url}: {exc}", exc_info=True)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error. Check logs for details."}
+    )
 
 # Health check endpoint for monitoring/load balancers
 @app.get("/ping")
@@ -99,7 +126,6 @@ async def startup_event():
                 engine.recover_orphaned_positions(auto_close=False),
                 timeout=10.0  # 10 second timeout
             )
-            logger.info("Startup recovery check completed")
         except asyncio.TimeoutError:
             logger.warning("Position recovery timed out - continuing startup anyway")
     except Exception as e:

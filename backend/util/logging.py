@@ -29,7 +29,7 @@ def setup_logging(level: int = None) -> None:
     handler.setFormatter(logging.Formatter(fmt, datefmt="%Y-%m-%d %H:%M:%S"))
     logging.basicConfig(level=level, handlers=[handler])
   else:
-    # Default: stdout (let systemd/journald handle rotation)
+    # Default: stdout; rely on host logging for rotation
     logging.basicConfig(format=fmt, level=level, datefmt="%Y-%m-%d %H:%M:%S")
 
 def get_logger(name: str) -> logging.Logger:

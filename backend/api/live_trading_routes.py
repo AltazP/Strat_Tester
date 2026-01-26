@@ -429,6 +429,19 @@ async def close_position(session_id: str, instrument: str):
             raise HTTPException(status_code=500, detail="Client not initialized")
         
         result = await client.close_position(instrument, session.account_id)
+        
+        # Force immediate metrics update to refresh positions
+        # Use timeout to prevent hanging the server
+        try:
+            await asyncio.wait_for(
+                engine._update_account_metrics(session_id),
+                timeout=5.0  # 5 second timeout to prevent hanging
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Metrics update timed out for session {session_id} after position close")
+        except Exception as e:
+            logger.warning(f"Failed to update metrics for session {session_id} after position close: {e}")
+        
         return {"status": "closed", "instrument": instrument, "result": result}
     except Exception as e:
         logger.error(f"Failed to close position: {e}")
@@ -455,6 +468,7 @@ async def close_account_position(account_id: str, instrument: str):
         client = OandaTradingClient(account_id=account_id, live=True)
         
         # First, check if the position actually exists by listing all positions
+        # This ensures we have fresh data
         try:
             all_positions = await client.get_positions(account_id)
             position_exists = any(pos.get("instrument") == instrument for pos in all_positions)
@@ -504,6 +518,23 @@ async def close_account_position(account_id: str, instrument: str):
                 if close_err.response.status_code == 404:
                     raise HTTPException(status_code=400, detail="No open position found for this instrument")
                 raise
+        
+        # Update session positions immediately if any sessions exist for this account
+        # Use timeout to prevent hanging the server if metrics update takes too long
+        engine = get_engine()
+        for session in engine.list_sessions():
+            if session.account_id == account_id:
+                # Force immediate metrics update to refresh positions synchronously
+                # Use timeout to prevent server hangs
+                try:
+                    await asyncio.wait_for(
+                        engine._update_account_metrics(session.session_id),
+                        timeout=5.0  # 5 second timeout to prevent hanging
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Metrics update timed out for session {session.session_id} after position close")
+                except Exception as e:
+                    logger.warning(f"Failed to update metrics for session {session.session_id} after position close: {e}")
         
         return {
             "status": "closed",

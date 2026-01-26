@@ -4,6 +4,7 @@ API Routes for Paper Trading
 from __future__ import annotations
 import asyncio
 import logging
+import time
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -16,6 +17,10 @@ from strategies.plugin_loader import load_strategies
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/paper-trading", tags=["paper-trading"])
+
+# Simple cache for positions endpoint to prevent rapid-fire requests
+_position_cache: Dict[str, tuple[float, Any]] = {}
+_POSITION_CACHE_TTL = 2.0  # Cache for 2 seconds to prevent duplicate requests
 
 # ==================== REQUEST MODELS ====================
 
@@ -380,6 +385,26 @@ async def close_position(session_id: str, instrument: str):
             raise HTTPException(status_code=500, detail="Client not initialized")
         
         result = await client.close_position(instrument, session.account_id)
+        
+        # Invalidate position cache for this account (safe operation)
+        try:
+            if session.account_id in _position_cache:
+                del _position_cache[session.account_id]
+        except Exception as e:
+            logger.warning(f"Failed to invalidate position cache: {e}")
+        
+        # Force immediate metrics update to refresh positions
+        # Use timeout to prevent hanging the server
+        try:
+            await asyncio.wait_for(
+                engine._update_account_metrics(session_id),
+                timeout=5.0  # 5 second timeout to prevent hanging
+            )
+        except asyncio.TimeoutError:
+            logger.warning(f"Metrics update timed out for session {session_id} after position close")
+        except Exception as e:
+            logger.warning(f"Failed to update metrics for session {session_id} after position close: {e}")
+        
         return {"status": "closed", "instrument": instrument, "result": result}
     except Exception as e:
         logger.error(f"Failed to close position: {e}")
@@ -430,13 +455,31 @@ async def list_granularities():
 @router.get("/accounts/{account_id}/positions")
 async def get_account_positions(account_id: str):
     """Get all open positions for an account (regardless of session status)."""
+    now = time.time()
+    
+    # Check cache first
+    if account_id in _position_cache:
+        cache_time, cached_data = _position_cache[account_id]
+        if now - cache_time < _POSITION_CACHE_TTL:
+            return cached_data
+    
     try:
         client = OandaTradingClient(account_id=account_id)
         positions = await client.get_positions(account_id)
-        return {
+        result = {
             "account_id": account_id,
             "positions": positions,
         }
+        
+        # Cache the result
+        _position_cache[account_id] = (now, result)
+        
+        # Clean old cache entries (keep only last 10 accounts)
+        if len(_position_cache) > 10:
+            oldest_key = min(_position_cache.keys(), key=lambda k: _position_cache[k][0])
+            del _position_cache[oldest_key]
+        
+        return result
     except Exception as e:
         logger.error(f"Failed to get positions for account {account_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -448,11 +491,15 @@ async def close_account_position(account_id: str, instrument: str):
         client = OandaTradingClient(account_id=account_id)
         
         # First, check if the position actually exists by listing all positions
+        # This also ensures we have fresh data (not cached)
         try:
             all_positions = await client.get_positions(account_id)
             position_exists = any(pos.get("instrument") == instrument for pos in all_positions)
             
             if not position_exists:
+                # Invalidate cache since position doesn't exist
+                if account_id in _position_cache:
+                    del _position_cache[account_id]
                 raise HTTPException(status_code=400, detail="No open position found for this instrument")
         except HTTPException:
             raise
@@ -477,12 +524,18 @@ async def close_account_position(account_id: str, instrument: str):
                 # Only short position - only include shortUnits, omit longUnits
                 result = await client.close_position(instrument, account_id, long_units=None, short_units="ALL")
             else:
+                # Invalidate cache since position doesn't exist
+                if account_id in _position_cache:
+                    del _position_cache[account_id]
                 raise HTTPException(status_code=400, detail="No open position found for this instrument")
         except HTTPException:
             raise
         except httpx.HTTPStatusError as e:
             # If get_position returns 404, the position doesn't exist
             if e.response.status_code == 404:
+                # Invalidate cache since position doesn't exist
+                if account_id in _position_cache:
+                    del _position_cache[account_id]
                 raise HTTPException(status_code=400, detail="No open position found for this instrument")
             # For other HTTP errors, try closing both sides as fallback
             logger.warning(f"Could not get position details (HTTP {e.response.status_code}), attempting to close both sides: {e}")
@@ -495,8 +548,35 @@ async def close_account_position(account_id: str, instrument: str):
             except httpx.HTTPStatusError as close_err:
                 # If close also fails with 404, the position doesn't exist
                 if close_err.response.status_code == 404:
+                    # Invalidate cache since position doesn't exist
+                    if account_id in _position_cache:
+                        del _position_cache[account_id]
                     raise HTTPException(status_code=400, detail="No open position found for this instrument")
                 raise
+        
+        # Invalidate cache after successful close to ensure fresh data on next request
+        try:
+            if account_id in _position_cache:
+                del _position_cache[account_id]
+        except Exception as e:
+            logger.warning(f"Failed to invalidate position cache: {e}")
+        
+        # Also update session positions immediately if any sessions exist for this account
+        # Use timeout to prevent hanging the server if metrics update takes too long
+        engine = get_engine()
+        for session in engine.list_sessions():
+            if session.account_id == account_id:
+                # Force immediate metrics update to refresh positions synchronously
+                # Use timeout to prevent server hangs
+                try:
+                    await asyncio.wait_for(
+                        engine._update_account_metrics(session.session_id),
+                        timeout=5.0  # 5 second timeout to prevent hanging
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"Metrics update timed out for session {session.session_id} after position close")
+                except Exception as e:
+                    logger.warning(f"Failed to update metrics for session {session.session_id} after position close: {e}")
         
         return {
             "status": "closed",
