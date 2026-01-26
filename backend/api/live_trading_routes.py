@@ -467,20 +467,8 @@ async def close_account_position(account_id: str, instrument: str):
     try:
         client = OandaTradingClient(account_id=account_id, live=True)
         
-        # First, check if the position actually exists by listing all positions
-        # This ensures we have fresh data
-        try:
-            all_positions = await client.get_positions(account_id)
-            position_exists = any(pos.get("instrument") == instrument for pos in all_positions)
-            
-            if not position_exists:
-                raise HTTPException(status_code=400, detail="No open position found for this instrument")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning(f"Could not list positions, will try to close anyway: {e}")
-        
-        # Get the position details to see if it's long or short
+        # Get the position details directly - this is the authoritative check
+        # Don't rely on the list, as it might have timing issues or miss positions
         try:
             position = await client.get_position(instrument, account_id)
             long_units = float(position.get("long", {}).get("units", 0))

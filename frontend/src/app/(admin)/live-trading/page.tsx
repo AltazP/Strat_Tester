@@ -289,7 +289,7 @@ function SessionCard({
       
       {positions.length > 0 && (
         <div className="mt-4 pt-4 border-t border-stroke dark:border-strokedark">
-          <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Open Positions</p>
+          <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">Session Positions</p>
           <div className="space-y-2">
             {positions.map((pos, idx) => (
               <div key={idx} className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-gray-900">
@@ -307,6 +307,60 @@ function SessionCard({
           </div>
         </div>
       )}
+      
+      {/* Trade History - Always visible, not just when expanded */}
+      <div className="mt-4 pt-4 border-t border-stroke dark:border-strokedark">
+        <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+          Trade History ({closedTrades.length + openTrades.length})
+        </p>
+        {closedTrades.length === 0 && openTrades.length === 0 ? (
+          <p className="text-xs text-gray-500 dark:text-gray-400 py-4 text-center">No trades yet</p>
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {[...closedTrades, ...openTrades].slice().reverse().map((trade) => {
+              const isClosed = trade.close_time !== null;
+              const unrealizedPl = trade.unrealized_pl ?? 0;
+              const isPositive = isClosed ? (trade.realized_pl >= 0) : (unrealizedPl >= 0);
+              const openDate = trade.open_time ? new Date(trade.open_time) : null;
+              const closeDate = trade.close_time ? new Date(trade.close_time) : null;
+              const pnl = isClosed ? trade.realized_pl : unrealizedPl;
+              
+              return (
+                <div key={trade.id} className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-gray-800 border border-stroke dark:border-strokedark">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="text-sm font-medium text-gray-800 dark:text-white/90">{trade.instrument}</p>
+                      {isClosed ? (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">CLOSED</span>
+                      ) : (
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-success-100 dark:bg-success-500/20 text-success-600 dark:text-success-400">OPEN</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      {trade.units > 0 ? 'LONG' : 'SHORT'} {Math.abs(trade.units).toFixed(0)} @ {trade.open_price.toFixed(5)}
+                      {isClosed && trade.close_price && ` → ${trade.close_price.toFixed(5)}`}
+                    </p>
+                    {openDate && (
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                        {openDate.toLocaleString()}
+                        {closeDate && ` → ${closeDate.toLocaleString()}`}
+                      </p>
+                    )}
+                  </div>
+                  <div className="text-right">
+                    <p className={`text-sm font-semibold ${isPositive ? 'text-success-500 dark:text-success-400' : 'text-error-500 dark:text-error-400'}`}>
+                      {isPositive ? '+' : ''}{pnl.toFixed(2)}
+                    </p>
+                    {!isClosed && (
+                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Unrealized</p>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
       
       {isExpanded && (
         <div className="mt-4 pt-4 border-t border-stroke dark:border-strokedark space-y-4">
@@ -341,58 +395,6 @@ function SessionCard({
             </div>
           </div>
           
-          <div className="pt-2 border-t border-stroke dark:border-strokedark">
-            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
-              Trade History ({closedTrades.length + openTrades.length})
-            </p>
-            {closedTrades.length === 0 && openTrades.length === 0 ? (
-              <p className="text-xs text-gray-500 dark:text-gray-400 py-4 text-center">No trades yet</p>
-            ) : (
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {[...closedTrades, ...openTrades].slice().reverse().map((trade) => {
-                  const isClosed = trade.close_time !== null;
-                  const unrealizedPl = trade.unrealized_pl ?? 0;
-                  const isPositive = isClosed ? (trade.realized_pl >= 0) : (unrealizedPl >= 0);
-                  const openDate = trade.open_time ? new Date(trade.open_time) : null;
-                  const closeDate = trade.close_time ? new Date(trade.close_time) : null;
-                  const pnl = isClosed ? trade.realized_pl : unrealizedPl;
-                  
-                  return (
-                    <div key={trade.id} className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-gray-800 border border-stroke dark:border-strokedark">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-1">
-                          <p className="text-sm font-medium text-gray-800 dark:text-white/90">{trade.instrument}</p>
-                          {isClosed ? (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">CLOSED</span>
-                          ) : (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-success-100 dark:bg-success-500/20 text-success-600 dark:text-success-400">OPEN</span>
-                          )}
-                        </div>
-                        <p className="text-xs text-gray-500 dark:text-gray-400">
-                          {trade.units > 0 ? 'LONG' : 'SHORT'} {Math.abs(trade.units).toFixed(0)} @ {trade.open_price.toFixed(5)}
-                          {isClosed && trade.close_price && ` → ${trade.close_price.toFixed(5)}`}
-                        </p>
-                        {openDate && (
-                          <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                            {openDate.toLocaleString()}
-                            {closeDate && ` → ${closeDate.toLocaleString()}`}
-                          </p>
-                        )}
-                      </div>
-                      <div className="text-right">
-                        <p className={`text-sm font-semibold ${isPositive ? 'text-success-500 dark:text-success-400' : 'text-error-500 dark:text-error-400'}`}>
-                          {isPositive ? '+' : ''}{pnl.toFixed(2)}
-                        </p>
-                        {!isClosed && (
-                          <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Unrealized</p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
         </div>
       )}
     </div>

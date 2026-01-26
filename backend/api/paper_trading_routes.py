@@ -453,12 +453,17 @@ async def list_granularities():
     }
 
 @router.get("/accounts/{account_id}/positions")
-async def get_account_positions(account_id: str):
-    """Get all open positions for an account (regardless of session status)."""
+async def get_account_positions(account_id: str, force_refresh: bool = False):
+    """Get all open positions for an account (regardless of session status).
+    
+    Args:
+        account_id: The OANDA account ID
+        force_refresh: If True, bypass cache and fetch fresh data from OANDA
+    """
     now = time.time()
     
-    # Check cache first
-    if account_id in _position_cache:
+    # Check cache first (unless force_refresh is True)
+    if not force_refresh and account_id in _position_cache:
         cache_time, cached_data = _position_cache[account_id]
         if now - cache_time < _POSITION_CACHE_TTL:
             return cached_data
@@ -490,23 +495,12 @@ async def close_account_position(account_id: str, instrument: str):
     try:
         client = OandaTradingClient(account_id=account_id)
         
-        # First, check if the position actually exists by listing all positions
-        # This also ensures we have fresh data (not cached)
-        try:
-            all_positions = await client.get_positions(account_id)
-            position_exists = any(pos.get("instrument") == instrument for pos in all_positions)
-            
-            if not position_exists:
-                # Invalidate cache since position doesn't exist
-                if account_id in _position_cache:
-                    del _position_cache[account_id]
-                raise HTTPException(status_code=400, detail="No open position found for this instrument")
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning(f"Could not list positions, will try to close anyway: {e}")
+        # First, ALWAYS invalidate cache to ensure fresh data
+        if account_id in _position_cache:
+            del _position_cache[account_id]
         
-        # Get the position details to see if it's long or short
+        # Get the position details directly - this is the authoritative check
+        # Don't rely on the list, as it might have timing issues
         try:
             position = await client.get_position(instrument, account_id)
             long_units = float(position.get("long", {}).get("units", 0))
