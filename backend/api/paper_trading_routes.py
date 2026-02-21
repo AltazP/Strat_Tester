@@ -386,19 +386,16 @@ async def close_position(session_id: str, instrument: str):
         
         result = await client.close_position(instrument, session.account_id)
         
-        # Invalidate position cache for this account (safe operation)
         try:
             if session.account_id in _position_cache:
                 del _position_cache[session.account_id]
         except Exception as e:
             logger.warning(f"Failed to invalidate position cache: {e}")
         
-        # Force immediate metrics update to refresh positions
-        # Use timeout to prevent hanging the server
         try:
             await asyncio.wait_for(
                 engine._update_account_metrics(session_id),
-                timeout=5.0  # 5 second timeout to prevent hanging
+                timeout=5.0
             )
         except asyncio.TimeoutError:
             logger.warning(f"Metrics update timed out for session {session_id} after position close")
@@ -454,12 +451,6 @@ async def list_granularities():
 
 @router.get("/accounts/{account_id}/positions")
 async def get_account_positions(account_id: str, force_refresh: bool = False):
-    """Get all open positions for an account (regardless of session status).
-    
-    Args:
-        account_id: The OANDA account ID
-        force_refresh: If True, bypass cache and fetch fresh data from OANDA
-    """
     now = time.time()
     
     # Check cache first (unless force_refresh is True)
@@ -495,77 +486,79 @@ async def close_account_position(account_id: str, instrument: str):
     try:
         client = OandaTradingClient(account_id=account_id)
         
-        # First, ALWAYS invalidate cache to ensure fresh data
         if account_id in _position_cache:
             del _position_cache[account_id]
         
-        # Get the position details directly - this is the authoritative check
-        # Don't rely on the list, as it might have timing issues
         try:
-            position = await client.get_position(instrument, account_id)
-            long_units = float(position.get("long", {}).get("units", 0))
-            short_units = float(position.get("short", {}).get("units", 0))
+            all_positions = await client.get_positions(account_id)
+            logger.info(f"Found {len(all_positions)} positions for account {account_id}, looking for {instrument}")
+            position_data = None
             
-            # Only close the side that has units - omit the other side entirely
-            # OANDA API doesn't accept "0" - we should omit fields we don't want to close
+            for pos in all_positions:
+                pos_instrument = pos.get("instrument")
+                logger.debug(f"Checking position: {pos_instrument} == {instrument}? {pos_instrument == instrument}")
+                if pos_instrument == instrument:
+                    position_data = pos
+                    logger.info(f"Found position data: {position_data}")
+                    break
+            
+            if not position_data:
+                logger.warning(f"Position {instrument} not found in positions list: {[p.get('instrument') for p in all_positions]}")
+                if account_id in _position_cache:
+                    del _position_cache[account_id]
+                raise HTTPException(status_code=400, detail="No open position found for this instrument")
+            
+            long_data = position_data.get("long", {})
+            short_data = position_data.get("short", {})
+            long_units_str = long_data.get("units", "0")
+            short_units_str = short_data.get("units", "0")
+            
+            long_units = float(long_units_str) if long_units_str else 0.0
+            short_units = float(short_units_str) if short_units_str else 0.0
+            
+            logger.info(f"Position {instrument}: long={long_units} (from '{long_units_str}'), short={short_units} (from '{short_units_str}')")
+            
             if long_units > 0 and short_units > 0:
-                # Both sides exist - close both
                 result = await client.close_position(instrument, account_id, long_units="ALL", short_units="ALL")
             elif long_units > 0:
-                # Only long position - only include longUnits, omit shortUnits
                 result = await client.close_position(instrument, account_id, long_units="ALL", short_units=None)
             elif short_units > 0:
-                # Only short position - only include shortUnits, omit longUnits
                 result = await client.close_position(instrument, account_id, long_units=None, short_units="ALL")
             else:
-                # Invalidate cache since position doesn't exist
+                logger.warning(f"Position {instrument} has no units: long={long_units}, short={short_units}. Position data: {position_data}")
                 if account_id in _position_cache:
                     del _position_cache[account_id]
                 raise HTTPException(status_code=400, detail="No open position found for this instrument")
         except HTTPException:
             raise
-        except httpx.HTTPStatusError as e:
-            # If get_position returns 404, the position doesn't exist
-            if e.response.status_code == 404:
-                # Invalidate cache since position doesn't exist
-                if account_id in _position_cache:
-                    del _position_cache[account_id]
-                raise HTTPException(status_code=400, detail="No open position found for this instrument")
-            # For other HTTP errors, try closing both sides as fallback
-            logger.warning(f"Could not get position details (HTTP {e.response.status_code}), attempting to close both sides: {e}")
-            result = await client.close_position(instrument, account_id)
         except Exception as e:
-            # If get_position fails for other reasons, try closing both sides (fallback)
-            logger.warning(f"Could not get position details, attempting to close both sides: {e}")
+            logger.warning(f"Could not get positions list, attempting to close directly: {e}", exc_info=True)
             try:
                 result = await client.close_position(instrument, account_id)
             except httpx.HTTPStatusError as close_err:
-                # If close also fails with 404, the position doesn't exist
+                logger.error(f"Close position failed with HTTP {close_err.response.status_code}: {close_err}")
                 if close_err.response.status_code == 404:
-                    # Invalidate cache since position doesn't exist
                     if account_id in _position_cache:
                         del _position_cache[account_id]
                     raise HTTPException(status_code=400, detail="No open position found for this instrument")
                 raise
+            except Exception as close_err:
+                logger.error(f"Failed to close position: {close_err}", exc_info=True)
+                raise HTTPException(status_code=500, detail=f"Failed to close position: {str(close_err)}")
         
-        # Invalidate cache after successful close to ensure fresh data on next request
         try:
             if account_id in _position_cache:
                 del _position_cache[account_id]
         except Exception as e:
             logger.warning(f"Failed to invalidate position cache: {e}")
         
-        # Also update session positions immediately if any sessions exist for this account
-        # Use timeout to prevent hanging the server if metrics update takes too long
         engine = get_engine()
         for session in engine.list_sessions():
             if session.account_id == account_id:
-                # Force immediate metrics update to refresh positions synchronously
-                # Use timeout to prevent server hangs
                 try:
                     await asyncio.wait_for(
                         engine._update_account_metrics(session.session_id),
-                        timeout=5.0  # 5 second timeout to prevent hanging
+                        timeout=5.0
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"Metrics update timed out for session {session.session_id} after position close")

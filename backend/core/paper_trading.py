@@ -19,63 +19,34 @@ from services.oanda import fetch_candles
 logger = logging.getLogger(__name__)
 
 def parse_iso_datetime(iso_str: str) -> datetime:
-    """
-    Parse ISO datetime string, handling nanoseconds by truncating to microseconds.
-    Python's fromisoformat() only supports up to microseconds (6 digits), but OANDA
-    sometimes returns nanoseconds (9 digits).
-    
-    This function is crash-safe and will never raise unhandled exceptions that could
-    crash the server. All errors are caught and re-raised as ValueError with context.
-    
-    Args:
-        iso_str: ISO format datetime string, e.g., "2025-12-08T19:00:01.105556610+00:00"
-    
-    Returns:
-        datetime object with timezone info
-    
-    Raises:
-        ValueError: If the string cannot be parsed (never crashes the server)
-    """
     try:
         if not iso_str or not isinstance(iso_str, str):
             raise ValueError(f"Invalid datetime string: {iso_str}")
         
-        # Replace Z with +00:00 for timezone
         iso_str = iso_str.replace("Z", "+00:00")
         
-        # Handle nanoseconds: truncate to microseconds (6 digits max)
-        # Split on the decimal point to separate date/time from fractional seconds
         if "." in iso_str:
             parts = iso_str.split(".", 1)
             if len(parts) == 2:
                 date_part = parts[0]
                 fractional_and_tz = parts[1]
                 
-                # Extract timezone and fractional seconds
-                # Look for timezone indicators: +HH:MM or -HH:MM
                 tz = ""
                 fractional = fractional_and_tz
                 
-                # Check for positive timezone offset (+HH:MM)
                 if "+" in fractional_and_tz:
                     idx = fractional_and_tz.index("+")
                     fractional = fractional_and_tz[:idx]
                     tz = fractional_and_tz[idx:]
-                # Check for negative timezone offset (-HH:MM)
-                # We need to be careful: the fractional part might have a minus sign
-                # Look for the pattern where we have digits, then -HH:MM
                 elif re.search(r'-\d{2}:\d{2}$', fractional_and_tz):
-                    # Pattern: digits followed by -HH:MM at the end
                     match = re.search(r'(.+?)(-\d{2}:\d{2})$', fractional_and_tz)
                     if match:
                         fractional = match.group(1)
                         tz = match.group(2)
                 
-                # Truncate nanoseconds to microseconds (max 6 digits)
                 if len(fractional) > 6:
                     fractional = fractional[:6]
                 
-                # Reconstruct the string
                 if tz:
                     iso_str = f"{date_part}.{fractional}{tz}"
                 else:
@@ -83,10 +54,8 @@ def parse_iso_datetime(iso_str: str) -> datetime:
         
         return datetime.fromisoformat(iso_str)
     except ValueError:
-        # Re-raise ValueError as-is (it's already a good error message)
         raise
     except Exception as e:
-        # Catch any unexpected errors and convert to ValueError to prevent crashes
         logger.error(f"Unexpected error parsing datetime '{iso_str}': {e}", exc_info=True)
         raise ValueError(f"Failed to parse datetime string '{iso_str}': {str(e)}")
 
