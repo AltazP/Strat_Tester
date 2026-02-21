@@ -112,6 +112,109 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+function TradeHistorySection({ closedTrades, openTrades }: { closedTrades: Trade[]; openTrades: Trade[] }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const tradesPerPage = 10;
+  
+  const allTrades = [...closedTrades, ...openTrades].slice().reverse();
+  const totalTrades = allTrades.length;
+  const totalPages = Math.ceil(totalTrades / tradesPerPage);
+  const startIndex = (currentPage - 1) * tradesPerPage;
+  const endIndex = startIndex + tradesPerPage;
+  const paginatedTrades = allTrades.slice(startIndex, endIndex);
+  
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [totalPages, currentPage]);
+  
+  if (totalTrades === 0) {
+    return (
+      <>
+        <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
+          Trade History (0)
+        </p>
+        <p className="text-xs text-gray-500 dark:text-gray-400 py-4 text-center">No trades yet</p>
+      </>
+    );
+  }
+  
+  return (
+    <>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+          Trade History ({totalTrades})
+        </p>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
+              disabled={currentPage === 1}
+              className="px-2 py-1 text-xs rounded border border-stroke dark:border-strokedark bg-white dark:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+            >
+              Prev
+            </button>
+            <span className="text-xs text-gray-500 dark:text-gray-400">
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1 text-xs rounded border border-stroke dark:border-strokedark bg-white dark:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50 dark:hover:bg-gray-700"
+            >
+              Next
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="space-y-2">
+        {paginatedTrades.map((trade) => {
+          const isClosed = trade.close_time !== null;
+          const unrealizedPl = trade.unrealized_pl ?? 0;
+          const isPositive = isClosed ? (trade.realized_pl >= 0) : (unrealizedPl >= 0);
+          const openDate = trade.open_time ? new Date(trade.open_time) : null;
+          const closeDate = trade.close_time ? new Date(trade.close_time) : null;
+          const pnl = isClosed ? trade.realized_pl : unrealizedPl;
+          
+          return (
+            <div key={trade.id} className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-gray-800 border border-stroke dark:border-strokedark">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-1">
+                  <p className="text-sm font-medium text-gray-800 dark:text-white/90">{trade.instrument}</p>
+                  {isClosed ? (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">CLOSED</span>
+                  ) : (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-success-100 dark:bg-success-500/20 text-success-600 dark:text-success-400">OPEN</span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {trade.units > 0 ? 'LONG' : 'SHORT'} {Math.abs(trade.units).toFixed(0)} @ {trade.open_price.toFixed(5)}
+                  {isClosed && trade.close_price && ` → ${trade.close_price.toFixed(5)}`}
+                </p>
+                {openDate && (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+                    {openDate.toLocaleString()}
+                    {closeDate && ` → ${closeDate.toLocaleString()}`}
+                  </p>
+                )}
+              </div>
+              <div className="text-right">
+                <p className={`text-sm font-semibold ${isPositive ? 'text-success-500 dark:text-success-400' : 'text-error-500 dark:text-error-400'}`}>
+                  {isPositive ? '+' : ''}{pnl.toFixed(2)}
+                </p>
+                {!isClosed && (
+                  <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Unrealized</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
 function ConnectionStatus({ isConnected, lastUpdateTime }: { isConnected: boolean; lastUpdateTime: number }) {
   const [timeSinceUpdate, setTimeSinceUpdate] = useState(0);
   
@@ -308,58 +411,12 @@ function SessionCard({
         </div>
       )}
       
-      {/* Trade History - Always visible, not just when expanded */}
+      {/* Trade History - Always visible with pagination */}
       <div className="mt-4 pt-4 border-t border-stroke dark:border-strokedark">
-        <p className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide mb-2">
-          Trade History ({closedTrades.length + openTrades.length})
-        </p>
-        {closedTrades.length === 0 && openTrades.length === 0 ? (
-          <p className="text-xs text-gray-500 dark:text-gray-400 py-4 text-center">No trades yet</p>
-        ) : (
-          <div className="space-y-2 max-h-64 overflow-y-auto">
-            {[...closedTrades, ...openTrades].slice().reverse().map((trade) => {
-              const isClosed = trade.close_time !== null;
-              const unrealizedPl = trade.unrealized_pl ?? 0;
-              const isPositive = isClosed ? (trade.realized_pl >= 0) : (unrealizedPl >= 0);
-              const openDate = trade.open_time ? new Date(trade.open_time) : null;
-              const closeDate = trade.close_time ? new Date(trade.close_time) : null;
-              const pnl = isClosed ? trade.realized_pl : unrealizedPl;
-              
-              return (
-                <div key={trade.id} className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-gray-800 border border-stroke dark:border-strokedark">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <p className="text-sm font-medium text-gray-800 dark:text-white/90">{trade.instrument}</p>
-                      {isClosed ? (
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">CLOSED</span>
-                      ) : (
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-success-100 dark:bg-success-500/20 text-success-600 dark:text-success-400">OPEN</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-gray-500 dark:text-gray-400">
-                      {trade.units > 0 ? 'LONG' : 'SHORT'} {Math.abs(trade.units).toFixed(0)} @ {trade.open_price.toFixed(5)}
-                      {isClosed && trade.close_price && ` → ${trade.close_price.toFixed(5)}`}
-                    </p>
-                    {openDate && (
-                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
-                        {openDate.toLocaleString()}
-                        {closeDate && ` → ${closeDate.toLocaleString()}`}
-                      </p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <p className={`text-sm font-semibold ${isPositive ? 'text-success-500 dark:text-success-400' : 'text-error-500 dark:text-error-400'}`}>
-                      {isPositive ? '+' : ''}{pnl.toFixed(2)}
-                    </p>
-                    {!isClosed && (
-                      <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5">Unrealized</p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
+        <TradeHistorySection 
+          closedTrades={closedTrades} 
+          openTrades={openTrades}
+        />
       </div>
       
       {isExpanded && (
@@ -595,10 +652,23 @@ function AccountManagementModal({
   }, [selectedPreset, selectedStrategy]);
   
   useEffect(() => {
-    if (isOpen && account) {
+    if (!isOpen || !account) return;
+
+    const fetchPositions = () => {
       onFetchAccountPositions(account.id);
-    }
-  }, [isOpen, account, onFetchAccountPositions]);
+    };
+
+    // Initial fetch when modal opens / account changes
+    fetchPositions();
+
+    // Poll positions every 5 seconds while modal is open
+    const intervalId = window.setInterval(fetchPositions, 5000);
+
+    return () => window.clearInterval(intervalId);
+    // We intentionally exclude onFetchAccountPositions from deps to avoid
+    // re-fetching on every render due to changing function identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, account?.id]);
   
   if (!isOpen || !account) return null;
   
@@ -1414,8 +1484,18 @@ function LiveTradingPageOld() {
         throw new Error(error.detail || "Failed to close position");
       }
       
-      // Refresh account positions after closing
+      // Force refresh account positions after closing (bypass cache)
       await fetchAccountPositions(accountId);
+      // Also refresh with force_refresh to bypass cache
+      try {
+        const refreshRes = await fetch(`${BE}/live-trading/accounts/${accountId}/positions?force_refresh=true`);
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          setAccountPositions(prev => ({ ...prev, [accountId]: data.positions || [] }));
+        }
+      } catch (e) {
+        console.warn("Failed to force refresh positions:", e);
+      }
       await loadAccounts();
     } catch (err: unknown) {
       alert((err as Error).message || "Failed to close position");
